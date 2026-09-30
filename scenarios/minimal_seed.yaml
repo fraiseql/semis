@@ -1,0 +1,16 @@
+# scenarios/minimal_seed.yaml
+scenario_id: 0x5001
+name: minimal_seed
+description: Seven continents and the countries on them
+mode: prep-seed          # required: prep-seed | read-back
+locale: en_US
+seed: 42
+
+tables:
+  - name: catalog.tb_continent
+    count: 7
+    overrides:
+      name: [Africa, Antarctica, Asia, Europe, North America, Oceania, South America]
+  - name: catalog.tb_country
+    count: 50
+    trusts_trigger: [created_by]      # a trigger fills it; do not refuse the row

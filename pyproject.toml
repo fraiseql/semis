@@ -1,0 +1,138 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fraiseql-semis"
+version = "0.1.0"
+description = "Semantic UUID-encoded fake data generator for PostgreSQL trinity pattern schemas"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Lionel Hamayon", email = "lionel@fraiseql.dev" }
+]
+keywords = [
+    "database",
+    "seeding",
+    "fake-data",
+    "faker",
+    "postgresql",
+    "uuid",
+    "testing",
+    "fraiseql"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    # The schema seam: reads a schema, orders tables by their foreign keys, says which
+    # columns may be written and what each must respect, writes/applies/validates seeds.
+    # Floor 1.24: prep-seed level 1 reads every row of an INSERT or a COPY and takes
+    # only a UUID column's value for a UUID; resolvers are found by routine name; every
+    # level reads the same files; `validate_seeds` takes a connection (1.23). Each
+    # staging table's final table is the one its resolver fills, in any schema; a wide
+    # RETURNS TABLE parses (1.24).
+    "fraiseql-confiture>=1.27,<2",
+    "faker>=24.0.0",
+    "pyyaml>=6.0",
+    # Read-back mode only: learning a parent's pk after its seed is applied. Schema
+    # reading goes through confiture, never through a hand-written catalog query.
+    "psycopg[binary]>=3.1.0",
+    # The `semis` command, built as confiture's own CLI is.
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.3.0",
+    "ty>=0.0.83",
+    "pre-commit>=3.6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/fraiseql/semis"
+Documentation = "https://fraiseql.dev/semis"
+Repository = "https://github.com/fraiseql/semis"
+"Bug Tracker" = "https://github.com/fraiseql/semis/issues"
+
+[project.scripts]
+semis = "fraiseql_semis.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fraiseql_semis"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/",
+    "tests/",
+    "docs/",
+    "scenarios/",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "pyproject.toml",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# The documents' code blocks are aligned by hand; the formatter would reflow them.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "ARG",  # flake8-unused-arguments
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+    "ERA",  # eradicate: no commented-out code
+    "PTH",  # flake8-use-pathlib
+    "PERF", # perflint
+    "PL",   # pylint
+]
+ignore = [
+    "E501",  # line length is the formatter's call, not the linter's
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "PLR2004",  # a test's expected value is a literal on purpose
+]
+
+[tool.ty.environment]
+python-version = "3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "integration: needs PostgreSQL at SEMIS_TEST_DATABASE_URL",
+    "slow: takes minutes, not seconds; a scale benchmark",
+]
+addopts = [
+    "--strict-markers",
+    "--tb=short",
+    "--cov=fraiseql_semis",
+    "--cov-report=term-missing",
+]

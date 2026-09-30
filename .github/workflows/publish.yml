@@ -1,0 +1,51 @@
+name: Publish
+
+# A signed v* tag: the CI gates, then the wheel and sdist built, installed and run, then
+# PyPI through trusted publishing. No token is stored in the repository.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  gates:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    runs-on: ubuntu-latest
+    needs: gates
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: The tag is the package's version
+        run: |
+          version=$(uv version --short)
+          test "${GITHUB_REF_NAME}" = "v${version}" \
+            || { echo "tag ${GITHUB_REF_NAME} is not v${version}"; exit 1; }
+          grep -q "^## \[${version}\]" CHANGELOG.md \
+            || { echo "CHANGELOG.md has no section for ${version}"; exit 1; }
+      - run: uv build
+      - name: The wheel installs and runs, away from the checkout
+        run: |
+          uv venv /tmp/smoke
+          uv pip install --python /tmp/smoke/bin/python dist/*.whl
+          cd /tmp
+          /tmp/smoke/bin/semis --help
+          /tmp/smoke/bin/semis decode-uuid 02030405-5001-0001-0000-000000000001
+          /tmp/smoke/bin/python -c "import fraiseql_semis; print(fraiseql_semis.__version__)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: build
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

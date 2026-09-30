@@ -1,0 +1,39 @@
+# Items, and only the rows an item needs: every NOT NULL parent is generated, every
+# nullable one — the account, the order, a product's brand and certification, a
+# supplier's account — is left NULL rather than drawn.
+scenario_id: 0x5201
+name: stock
+description: Fifty items of ten products from four suppliers
+mode: prep-seed
+locale: en_US
+seed: 42
+
+tables:
+  - name: catalog.tb_unit
+    count: 2
+    overrides: {deleted_at: null, deleted_by: null}
+  - name: catalog.tb_category
+    count: 3
+    overrides: {deleted_at: null, deleted_by: null}
+  - name: catalog.tb_supplier
+    count: 4
+    overrides: {fk_account: null, deleted_at: null, deleted_by: null}
+  - name: catalog.tb_product
+    count: 10                        # 2 base products, 4 variants of each
+    hierarchy:
+      parent: fk_base_product
+      roots: 2
+      fan_out: 4
+    overrides:
+      fk_brand: null
+      fk_certification: null
+      deleted_at: null
+      deleted_by: null
+  - name: inventory.tb_item
+    count: 50
+    overrides:
+      fk_account: null
+      fk_order: null
+      disposed_at: null
+      deleted_at: null
+      deleted_by: null

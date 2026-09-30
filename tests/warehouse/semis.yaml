@@ -1,0 +1,14 @@
+# A warehouse's catalogue and stock: a synthetic schema of the shape a real one has —
+# a chain of NOT NULL parents, nullable ones left NULL, a hierarchy, staging twins.
+schema:
+  ddl: schema/
+scenarios: scenarios/
+table_codes:
+  catalog.tb_unit: 0x020101
+  catalog.tb_category: 0x020201
+  catalog.tb_supplier: 0x020301
+  catalog.tb_product: 0x020401
+  inventory.tb_item: 0x030101
+providers: [i18n, organization]
+prep_seed:
+  prep_seed_schema: prep_seed

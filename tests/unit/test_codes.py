@@ -28,7 +28,7 @@ def test_uuid_text_shows_the_registered_hex_digits() -> None:
     codes = TableCodes({"catalog.tb_language": 0x01020304})
     generator = SemanticUUIDGenerator(scenario_id=0x5001)
     encoded = generator.generate(codes.code_for("catalog.tb_language"), sequence=0x42)
-    assert str(encoded) == "01020304-5001-0001-0000-000000000042"
+    assert str(encoded) == "01020304-5001-8001-8000-000000000042"
 
 
 def test_bare_table_name_is_refused() -> None:

@@ -9,12 +9,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from faker import Faker
+from faker.config import AVAILABLE_LOCALES
 
 from fraiseql_semis.errors import RowContractError
 from fraiseql_semis.rows import Violation, declared_length
 from fraiseql_semis.schema import ColumnFacts
 
-Provider = Callable[[Faker, ColumnFacts], object]
+LOCALES = frozenset(AVAILABLE_LOCALES)
+"""The locales a scenario may name: Faker's."""
+
+type Provider = Callable[[Faker, ColumnFacts], object]
 """A custom provider: the run's seeded ``Faker`` and the column's facts in, a value out."""
 
 _BY_NAME: dict[str, Callable[[Faker], object]] = {
@@ -132,6 +136,12 @@ class CustomProviderRegistry:
     def register_library(self, library: Library) -> None:
         self._rules.extend((rule, library.providers[rule.provider]) for rule in library.rules)
 
+    def names(self, table: str, column: str) -> bool:
+        """Whether *column* of the qualified *table* has a provider of its own: one asked
+        for by name, unlike a global pattern or a library rule, which say how a column is
+        filled when it is, not whether."""
+        return (table, column) in self._columns
+
     def matching(self, column: ColumnFacts) -> Provider | None:
         """The provider of the first library rule *column* matches."""
         return next((provider for rule, provider in self._rules if rule.matches(column)), None)
@@ -171,6 +181,10 @@ class FakerProvider:
     def value_for(self, column: ColumnFacts, *, table: str) -> object:
         """A value for *column* of the qualified *table*."""
         return self.drawer(column, table=table)()
+
+    def names(self, column: ColumnFacts, *, table: str) -> bool:
+        """Whether the registry gives *column* of the qualified *table* a provider by name."""
+        return self._registry.names(table, column.name)
 
     def drawer(self, column: ColumnFacts, *, table: str) -> Callable[[], object]:
         """What draws each value for *column* of the qualified *table*, chosen once.

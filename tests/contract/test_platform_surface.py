@@ -18,8 +18,6 @@ SEMIS_USES = (
     "write_insert_seed",
     "apply_seeds",
     "validate_seeds",
-    "diff",
-    "tier_of",
     # types
     "Connection",
     "SchemaModel",
@@ -32,8 +30,6 @@ SEMIS_USES = (
     "ApplyResult",
     "PrepSeedReport",
     "PrepSeedViolation",
-    "SchemaDiff",
-    "RiskTier",
     # errors
     "ConfiturError",
     "SchemaError",

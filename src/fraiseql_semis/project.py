@@ -11,13 +11,12 @@ from dataclasses import dataclass, field
 from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 
-import yaml
-
 from fraiseql_semis.codes import TableCodes
 from fraiseql_semis.errors import ProjectError
 from fraiseql_semis.faker_provider import Library, Provider
 from fraiseql_semis.providers import SHIPPED
-from fraiseql_semis.scenario import ScenarioManager
+from fraiseql_semis.readback import checked_url
+from fraiseql_semis.scenario import ScenarioManager, read_yaml
 from fraiseql_semis.schema import SchemaFacts, database_url
 from fraiseql_semis.staging import Staging
 
@@ -26,6 +25,9 @@ _PROJECT_KEYS = {"schema", "table_codes", "scenarios", "providers", "prep_seed"}
 _PREP_SEED_KEYS = {"prep_seed_schema", "schema_dir", "catalog_schema"}
 _SCHEMA_KEYS = {"ddl", "env", "project_dir", "database"}
 _SOURCES = ("ddl", "env", "database")
+_PROJECT_YAML = (
+    "Fix the YAML at that line: semis.yaml maps the keys the semis.yaml reference lists."
+)
 ENTRY_POINTS = "fraiseql_semis.providers"
 """The entry-point group an installed provider library registers under, by its name."""
 
@@ -88,7 +90,7 @@ class Project:
     catalog_schema: str | None = None
 
     @classmethod
-    def find(cls, config: Path | None) -> "Project | None":
+    def find(cls, config: Path | None) -> Project | None:
         """The project *config* names, or ``./semis.yaml`` when it exists; else ``None``."""
         if config is None:
             if not DEFAULT_CONFIG.is_file():
@@ -97,7 +99,7 @@ class Project:
         return cls.load(config)
 
     @classmethod
-    def load(cls, path: Path | str) -> "Project":
+    def load(cls, path: Path | str) -> Project:
         """The project the file at *path* describes; its paths are relative to that file.
 
         A malformed file is refused with ``ProjectError`` naming the key at fault.
@@ -108,7 +110,7 @@ class Project:
                 f"no project file at {path}",
                 resolution_hint="Write a semis.yaml naming the schema and the table codes.",
             )
-        data = yaml.safe_load(path.read_text())
+        data = read_yaml(path, ProjectError, _PROJECT_YAML)
         if not isinstance(data, dict):
             raise ProjectError(f"{path} holds no mapping")
         _refuse_unknown(str(path), data, _PROJECT_KEYS)
@@ -177,7 +179,7 @@ class Project:
         if isinstance(self.schema, SchemaFacts):
             return self.schema
         if self.schema.schemas is not None:
-            database_url = self.database_url(database_url, mutating=False)
+            database_url = checked_url(self.database_url(database_url, mutating=False))
         return self.schema.read(self.table_codes, database_url=database_url)
 
     def manager(self, *, database_url: str | None = None) -> ScenarioManager:
@@ -257,7 +259,7 @@ def _provider_entry(path: Path, entry: object) -> Library | dict[str, Provider]:
     except ImportError as error:
         raise ProjectError(
             f"{path}: providers: {module} does not import: {error}",
-            resolution_hint="Install the module, or run from the directory that holds it.",
+            resolution_hint="Install the module, or put the directory that holds it on PYTHONPATH.",
         ) from error
     if found is _MISSING:
         raise ProjectError(
@@ -367,7 +369,7 @@ def _table_codes(path: Path, value: object) -> TableCodes:
         codes_path = path.parent / value
         if not codes_path.is_file():
             raise ProjectError(f"{path}: table_codes: names {codes_path}, which does not exist")
-        value = yaml.safe_load(codes_path.read_text()) or {}
+        value = read_yaml(codes_path, ProjectError, _PROJECT_YAML) or {}
     if not isinstance(value, dict):
         raise ProjectError(f"{path}: table_codes: maps a qualified table name to its hex code")
     for table, code in value.items():
@@ -376,8 +378,8 @@ def _table_codes(path: Path, value: object) -> TableCodes:
     return TableCodes(value)
 
 
-def _refuse_unknown(where: str, data: dict[str, object], known: set[str]) -> None:
-    unknown = sorted(set(data) - known)
+def _refuse_unknown(where: str, data: dict[object, object], known: set[str]) -> None:
+    unknown = sorted(str(key) for key in set(data) - known)
     if unknown:
         raise ProjectError(
             f"{where}: unknown key {', '.join(unknown)}",

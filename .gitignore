@@ -51,9 +51,11 @@ htmlcov/
 # Ruff
 .ruff_cache/
 
-# Documentation
+# Documentation: the site's dependencies, its build and Astro's cache
 docs/_build/
-site/
+site/node_modules/
+site/dist/
+site/.astro/
 
 # Local configuration
 *.local.yaml

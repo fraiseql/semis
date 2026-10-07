@@ -6,6 +6,10 @@ and the other's does not.
 
 import ast
 
+from typer.main import get_group
+from typer.testing import CliRunner
+
+from fraiseql_semis.cli import app
 from tests.unit.guards import package_modules
 
 OWNER = "cli/options.py"
@@ -38,3 +42,13 @@ def test_the_owner_is_not_stale() -> None:
 
 def test_guard_sees_an_option() -> None:
     assert _declarations(ast.parse('Seed = Annotated[int, typer.Option("--seed")]'))
+
+
+def test_every_option_names_what_it_takes() -> None:
+    """A parser's own name is not what a reader types: ``--scenario-id <lambda>``."""
+    group = get_group(app)
+    shown = {
+        name: CliRunner().invoke(app, [name, "--help"], env={"COLUMNS": "200"}).output
+        for name in group.commands
+    }
+    assert [name for name, output in shown.items() if "lambda" in output] == []

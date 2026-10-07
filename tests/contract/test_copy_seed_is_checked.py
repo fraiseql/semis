@@ -14,7 +14,7 @@ from fraiseql_semis.schema import SchemaFacts
 from tests.ddl import CODES, TRINITY
 
 FACTS = SchemaFacts.from_source(TRINITY, table_codes=TableCodes(CODES))
-EUROPE = "02030405-5001-0001-0000-000000000001"
+EUROPE = "02030405-5001-8001-8000-000000000001"
 ROWS = [
     {"id": EUROPE, "identifier": "europe", "name": "Europe"},
     {"id": "not-a-uuid", "identifier": "asia", "name": "Asia"},

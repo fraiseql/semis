@@ -27,7 +27,6 @@ from confiture.platform import (
     SeedFile,
     column_facts,
     dependency_order,
-    diff,
     introspect,
     naming_hints,
     parse_schema,
@@ -52,6 +51,7 @@ __all__ = [
     "SeedFile",
     "SourceKind",
     "TableFacts",
+    "TableKeys",
     "database_url",
 ]
 
@@ -63,6 +63,17 @@ SourceKind = Literal["ddl", "live"]
 
 The two spell the same schema differently, so facts from one are comparable only with
 facts from the same kind (ARCHITECTURE §8)."""
+
+
+@dataclass(frozen=True)
+class TableKeys:
+    """How a table's rows are told apart: its reference, surrogate key and natural id.
+
+    A table semis reads and never writes has these and no code."""
+
+    ref: ObjectRef
+    surrogate_pk: str | None
+    natural_id: str | None
 
 
 @dataclass(frozen=True)
@@ -85,30 +96,28 @@ class SchemaFacts:
         table_codes: TableCodes,
         *,
         source_kind: SourceKind,
-        source: SchemaSource | None = None,
     ) -> None:
         self._model = model
         self._codes = table_codes
         self._source_kind: SourceKind = source_kind
-        self._source = source
         self._refs = {ref.display: ref for ref in model.tables}
 
     @classmethod
-    def from_source(cls, source: SchemaSource, *, table_codes: TableCodes) -> "SchemaFacts":
+    def from_source(cls, source: SchemaSource, *, table_codes: TableCodes) -> SchemaFacts:
         """From DDL text, a path, or a sequence of them — no project, no database."""
-        return cls(parse_schema(source), table_codes, source_kind="ddl", source=source)
+        return cls(parse_schema(source), table_codes, source_kind="ddl")
 
     @classmethod
     def from_env(
         cls, env: str, *, project_dir: Path | None = None, table_codes: TableCodes
-    ) -> "SchemaFacts":
+    ) -> SchemaFacts:
         """From a confiture project's build for *env*."""
         return cls(parse_schema(env=env, project_dir=project_dir), table_codes, source_kind="ddl")
 
     @classmethod
     def from_database(
         cls, database: str | Connection, *, schemas: Sequence[str], table_codes: TableCodes
-    ) -> "SchemaFacts":
+    ) -> SchemaFacts:
         """From a live database, reading only *schemas*."""
         return cls(introspect(database, schemas=schemas), table_codes, source_kind="live")
 
@@ -122,25 +131,15 @@ class SchemaFacts:
         """Confiture's model, for the calls that take one."""
         return self._model
 
-    def snapshot(self) -> str | None:
-        """The DDL text these facts were read from; ``None`` unless built ``from_source``.
+    def ref(self, table: str) -> ObjectRef | None:
+        """*table*'s reference in the model; ``None`` when the model lacks it."""
+        return self._refs.get(table)
 
-        A path is read as ``parse_schema`` reads it: a directory is every ``.sql`` under
-        it, sorted by path, and a sequence is its paths in order. confiture publishes no
-        call returning an env build's text, and a live database has none.
-        """
-        if self._source is None:
-            return None
-        if isinstance(self._source, str):
-            return self._source
-        paths = [self._source] if isinstance(self._source, Path) else self._source
-        return "\n".join(_read(Path(path)) for path in paths)
-
-    def changes_since(self, snapshot: str) -> tuple[str, ...] | None:
-        """What ``diff`` reports from *snapshot* to this schema; ``None`` with no source to diff."""
-        if self._source is None:
-            return None
-        return tuple(str(change) for change in diff(snapshot, self._source).changes)
+    def keys_for(self, table: str) -> TableKeys:
+        """*table*'s keys, its trinity roles; no code is needed. A table the model does
+        not hold raises confiture's ``NotInModelError``."""
+        hints = naming_hints(self._model, table)
+        return TableKeys(self._refs[table], hints.surrogate_pk, hints.natural_id)
 
     def facts_for(self, table: str) -> TableFacts:
         """*table*'s writable columns with their facts, its trinity roles and its code.
@@ -176,11 +175,6 @@ class SchemaFacts:
     def insert_order(self, tables: Iterable[str] | None = None) -> list[ObjectRef]:
         """Parents before children, from the real foreign keys."""
         return dependency_order(self._model, tables=tables)
-
-
-def _read(path: Path) -> str:
-    files = sorted(path.rglob("*.sql")) if path.is_dir() else [path]
-    return "\n".join(file.read_text(encoding="utf-8") for file in files)
 
 
 def database_url(

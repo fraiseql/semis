@@ -27,17 +27,20 @@ and what each value must respect, and writes, applies and validates the seed fil
 
 ## What it does not do
 
-semis reads no `information_schema`, sorts no tables, and writes no SQL by hand. All three
-are confiture's, and going through it is why `VARCHAR(50)` gets fifty characters and why a
-`REFERENCES` clause is read rather than guessed.
+semis reads no `information_schema`, sorts no tables, and writes no seed SQL itself. All
+three are confiture's, and going through it is why `VARCHAR(50)` gets fifty characters and
+why a `REFERENCES` clause is read rather than guessed. Its only SQL is the handful of
+parameterised statements in one module, for read-back, the re-apply check and its lock.
 
 ---
 
 ## Install
 
 ```bash
-uv add fraiseql-semis          # brings fraiseql-confiture>=1.27,<2
+uv add fraiseql-semis          # brings fraiseql-confiture>=1.30,<2
 ```
+
+semis runs on Python 3.14 and writes to PostgreSQL 16 or later.
 
 ## The chain, end to end
 
@@ -73,9 +76,9 @@ are the point:
 ```
  pk_continent |                  id                  | identifier |    name
 --------------+--------------------------------------+------------+-------------
-            1 | 02030405-5001-0001-0000-000000000001 | cont-1     | Continent 1
-            2 | 02030405-5001-0001-0000-000000000002 | cont-2     | Continent 2
-            3 | 02030405-5001-0001-0000-000000000003 | cont-3     | Continent 3
+            1 | 02030405-5001-8001-8000-000000000001 | cont-1     | Continent 1
+            2 | 02030405-5001-8001-8000-000000000002 | cont-2     | Continent 2
+            3 | 02030405-5001-8001-8000-000000000003 | cont-3     | Continent 3
 (3 rows)
 ```
 
@@ -90,7 +93,7 @@ SeedError: PostgreSQL fills catalog.tb_continent.pk_continent (an identity, gene
 `id` is semis' — and it decodes:
 
 ```bash
-$ semis decode-uuid 02030405-5001-0001-0000-000000000001
+$ semis decode-uuid 02030405-5001-8001-8000-000000000001
 table_code   0x02030405   catalog.tb_continent
 scenario_id  0x5001       minimal_seed
 version      1
@@ -113,7 +116,7 @@ on a laptop.
 | Database needed to generate | no | yes |
 | Translation done by | the project's `fn_resolve_*` functions | a join on the UUID semis wrote |
 | Output is | byte-reproducible | reproducible except the FK integers, which are PostgreSQL's |
-| Default writer | `INSERT` (confiture's prep-seed level 1 reads only INSERT) | `COPY` |
+| Default writer | `INSERT`; confiture's prep-seed level 1 reads `COPY` too | `COPY` |
 
 A prep-seed scenario names the catalog tables, whose foreign keys, constraints and pin
 semis reads, and writes each into its **staging twin**: the same table name in the
@@ -149,10 +152,32 @@ before a row is drawn — unless the key is nullable and the scenario leaves it 
     overrides: {fk_account: null, fk_order: null}   # no account, no order
 ```
 
+In read-back, a parent may also be rows the database already holds — reference rows the
+schema's own DDL inserts. The scenario lists their table under `existing:`, and children
+point at them, round-robin, as at a parent the run generated:
+
+```yaml
+existing:
+  - name: shop.tb_category            # every row, round-robin, in pk_* order
+  - name: shop.tb_country
+    where: {identifier: [fr, de, es]} # these rows, in this order
+```
+
+A nullable column that is not a key — a soft-delete or an audit column — is written
+`NULL` unless the scenario names it: by an override, by a provider for it, or under
+`fill:`, so a scenario with no overrides writes rows every view sees. The run names, per
+table, the columns it left `NULL`; `fill: all` draws every one.
+
+```yaml
+  - name: shop.tb_customer
+    count: 3
+    fill: [created_by]                # drawn; deleted_at is written NULL
+```
+
 From Python, a scenario runs through `ScenarioManager`, which writes one seed file per
-table and, beside them, `schema_pin.yaml` and the DDL it digested, `schema_pin.ddl`: the
-block and the snapshot to copy beside the scenario so a replay against a moved schema is
-refused.
+table and, beside them, `schema_pin.yaml` and the facts it digested,
+`minimal_seed.facts.json`: the block and the file to copy beside the scenario so a replay
+against a moved schema is refused, naming the table and the column that moved.
 
 ```python
 from fraiseql_semis import ScenarioManager
@@ -194,11 +219,12 @@ semis list-scenarios
 semis init-scenario demo --mode read-back                  # a template, with the next free id
 ```
 
-`apply` connects where confiture would: `--database-url`, then `CONFITURE_DATABASE_URL`,
-then the `env:` file's `database_url`; the ambient `DATABASE_URL` alone is refused to a
-command that writes. The whole run is one transaction, committed at the end, and
-`apply --dry-run` runs it and rolls it back. A refusal exits 1, naming the table and the
-column; a confiture error exits with confiture's own code and hint.
+`apply` connects where confiture would: `--database-url`; else, for a project read from an
+`env:`, that environment's `database_url`, with a `CONFITURE_DATABASE_URL` beside it
+refused as ambiguous; else `CONFITURE_DATABASE_URL`. The ambient `DATABASE_URL` alone is
+refused to a command that writes. The whole run is one transaction, committed at the
+end, and `apply --dry-run` runs it and rolls it back. A refusal exits 1, naming the table
+and the column; a confiture error exits with confiture's own code and hint.
 
 `validate-seeds` rehearses a prep-seed scenario into a temporary directory and has
 confiture judge exactly its files; `--seeds DIR` judges a directory instead. Levels 1–3
@@ -216,9 +242,9 @@ Python builds directly, with no file.
 semis ships two provider libraries — `i18n` (ISO country, language and currency codes,
 locales, time zones) and `organization` (company names, SIREN/SIRET and French VAT
 numbers that check, job titles, contacts). A library named under
-`providers:` draws every column its rules match by name and type — `lang VARCHAR(2)`
-receives `fr`, a `MACADDR` column a MAC address — and never a value longer than the
-column holds. A scenario names one provider for one column:
+`providers:` draws every column its rules match by name and type that the run fills —
+`lang VARCHAR(2)` receives `fr`, `currency CHAR(3)` an ISO 4217 code — and never a value
+longer than the column holds. A rule does not make a nullable column drawn; `fill:` does. A scenario names one provider for one column:
 
 ```yaml
   - name: catalog.tb_currency
@@ -227,8 +253,8 @@ column holds. A scenario names one provider for one column:
 ```
 
 `slogan` is the project's own: `myproject.fake:PROVIDERS` is a mapping of names to
-functions taking the run's seeded `Faker` and the column's facts. It is imported; no
-scenario string is ever evaluated.
+functions taking the run's seeded `Faker` and the column's facts. It is imported, so it
+is installed or on `PYTHONPATH`; no scenario string is ever evaluated.
 
 ### Your own provider library
 
@@ -283,9 +309,63 @@ from an earlier one, `fan_out` children to a parent.
 In prep-seed a child carries its parent's UUID, like any child. In read-back each level is
 written, applied and read back before the next is drawn, one seed file per level, and
 `path:` is set from the keys PostgreSQL gave: the parent's path, a dot, the row's own
-`pk_*`. A self-referencing table without a `hierarchy:` is refused.
+`pk_*`.
+
+A flat set of rows, every one a root, needs no tree: override the nullable self-FK `null`.
+
+```yaml
+  - name: catalog.tb_location        # a flat set: no row has a parent
+    count: 5
+    overrides: {fk_parent_location: null}
+```
+
+A self-referencing table that neither declares a `hierarchy:` nor leaves its key `null` is
+refused.
 
 ---
+
+## Running it again
+
+A scenario applies once, to a reset database. A row's UUID is a function of its scenario
+and its position, so a second run would write the same ones. semis asks first, one query
+per table on the scenario's UUID range, and refuses before anything is written. The check
+skips a table with no `id` column, or whose `id` is not a uuid, since it has no range to
+ask:
+
+```bash
+semis apply scenarios/minimal_seed.yaml -o db/seeds/again --database-url postgresql:///myproject_dev
+```
+
+```text
+scenario minimal_seed is already applied: prep_seed.tb_continent holds its rows
+Hint: A scenario applies once, to a reset database. Reset it with psql -c 'TRUNCATE "catalog"."tb_continent", "prep_seed"."tb_continent", "catalog"."tb_country", "prep_seed"."tb_country" RESTART IDENTITY', or recreate the database, then apply again.
+```
+
+Reset the run's tables, or recreate the database, then apply. The statement empties
+those tables whole, other scenarios' rows and rows the schema's DDL inserted included, and
+no other table:
+
+```bash
+psql -d myproject_dev -c 'TRUNCATE "catalog"."tb_continent", "prep_seed"."tb_continent", "catalog"."tb_country", "prep_seed"."tb_country" RESTART IDENTITY'
+semis apply scenarios/minimal_seed.yaml -o db/seeds/again --database-url postgresql:///myproject_dev
+```
+
+When a table the run does not write has a foreign key into one of them, PostgreSQL
+refuses the statement and empties nothing:
+
+```text
+ERROR:  cannot truncate a table referenced in a foreign key constraint
+DETAIL:  Table "tb_city" references "tb_country".
+HINT:  Truncate table "tb_city" at the same time, or use TRUNCATE ... CASCADE.
+```
+
+Whether that table's rows go too is yours to decide: add it to the statement, or recreate
+the database.
+
+There is no upsert. `ON CONFLICT DO NOTHING` would apply a scenario that has drifted
+from the rows it once wrote and say nothing; a re-run that starts from a reset database
+writes exactly what the scenario says. `RESTART IDENTITY` also gives read-back the same
+keys as the first run.
 
 ## Two things semis insists on
 
@@ -299,8 +379,8 @@ no line and no generator in sight.
 
 **A scenario knows the schema it was written against.** Each one records a digest of the
 facts semis consumes — writable columns, their types, nullability, defaults, enums, checks,
-FK targets — and a replay against a moved schema is refused, with `confiture.diff`
-reporting what changed. Adding an index does not move the digest; adding `NOT NULL` to a
+FK targets — and keeps those facts beside it, so a replay against a moved schema is
+refused naming each table and column that moved, whatever the schema's source. Adding an index does not move the digest; adding `NOT NULL` to a
 column semis writes does. `--no-pin` skips the check for one run and says so.
 
 ---

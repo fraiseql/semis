@@ -1,0 +1,9 @@
+---
+// The repository's CHANGELOG.md, rendered at build time rather than copied: the page
+// cannot drift from the file. Its H1 is dropped; the page's title is the frontmatter's.
+import { compiledContent } from '../../../CHANGELOG.md';
+
+const html = (await compiledContent()).replace(/<h1[^>]*>.*?<\/h1>\s*/s, '');
+---
+
+<Fragment set:html={html} />

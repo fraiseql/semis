@@ -6,10 +6,13 @@ learned keys in, values out; no database and no file system.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Protocol
+from typing import Protocol, override
 
 from fraiseql_semis.errors import ResolutionError
-from fraiseql_semis.schema import ColumnFacts, ObjectRef, TableFacts
+from fraiseql_semis.schema import ColumnFacts, ObjectRef, TableFacts, TableKeys
+
+EXISTING_BY = "identifier"
+"""The column a scenario names existing rows by: the slug, the trinity's readable key."""
 
 
 class Resolver(Protocol):
@@ -35,10 +38,12 @@ class _RoundRobin:
     """Children spread over their parents per child column: child *k* gets parent *k mod n*."""
 
     def __init__(self) -> None:
-        self._parents: dict[str, tuple[TableFacts, list[object]]] = {}
+        self._parents: dict[str, tuple[TableFacts | TableKeys, list[object]]] = {}
         self._next: dict[tuple[str, str], int] = {}
+        # Tables whose keys were read, not learned from rows: no natural id is needed.
+        self._read: set[str] = set()
 
-    def _offer(self, table: TableFacts, values: list[object]) -> None:
+    def _offer(self, table: TableFacts | TableKeys, values: list[object]) -> None:
         """*values* for *table*'s next rows: a hierarchy offers its rows level by level."""
         _, known = self._parents.setdefault(table.ref.display, (table, []))
         known.extend(values)
@@ -65,7 +70,7 @@ class _RoundRobin:
         if parent.display not in self._parents:
             raise _no_rows(column, table, parent)
         parent_facts, values = self._parents[parent.display]
-        if parent_facts.natural_id is None:
+        if parent_facts.natural_id is None and parent.display not in self._read:
             raise ResolutionError(
                 f"{table}.{column.name} references {parent.display}, which shows no natural "
                 "id, so semis cannot tell its rows apart",
@@ -76,7 +81,7 @@ class _RoundRobin:
             raise _no_rows(column, table, parent)
         return values
 
-    def _check(self, column: ColumnFacts, table: str, parent: TableFacts) -> None:
+    def _check(self, column: ColumnFacts, table: str, parent: TableFacts | TableKeys) -> None:
         """Refuse *column* when this mode cannot point it at *parent*."""
 
 
@@ -124,7 +129,14 @@ class ReadBackResolver(_RoundRobin):
             )
         self._offer(table, list(found))
 
-    def _check(self, column: ColumnFacts, table: str, parent: TableFacts) -> None:
+    def existing(self, table: TableKeys, keys: Sequence[int]) -> None:
+        """*keys*, the ``pk_*`` of rows *table* already holds, as parents later rows may
+        point at: offered as learned keys are, so children spread over them the same way."""
+        self._read.add(table.ref.display)
+        self._offer(table, list(keys))
+
+    @override
+    def _check(self, column: ColumnFacts, table: str, parent: TableFacts | TableKeys) -> None:
         reference = column.foreign_key
         if reference is not None and reference.column != parent.surrogate_pk:
             raise ResolutionError(
@@ -136,12 +148,17 @@ class ReadBackResolver(_RoundRobin):
 
 
 def require_parents(
-    table: TableFacts, counts: Mapping[str, int], *, left_null: frozenset[str] = frozenset()
+    table: TableFacts,
+    counts: Mapping[str, int],
+    *,
+    left_null: frozenset[str] = frozenset(),
+    existing: frozenset[str] = frozenset(),
 ) -> None:
     """Refuse *table* when a foreign key's parent draws no rows in a run of *counts*.
 
     The draw refuses the same column the same way; this says so before a row is drawn.
-    A self-reference is a hierarchy's to judge, and a key in *left_null* needs no parent.
+    A self-reference is a hierarchy's to judge, a key in *left_null* needs no parent, and
+    a parent in *existing* has its rows in the database already.
     """
     for column in table.columns:
         parent = column.foreign_key.table if column.foreign_key is not None else None
@@ -149,6 +166,7 @@ def require_parents(
             parent is not None
             and parent != table.ref
             and column.name not in left_null
+            and parent.display not in existing
             and counts.get(parent.display, 0) < 1
         ):
             raise _no_rows(column, table.ref.display, parent)
@@ -163,5 +181,8 @@ def _parent_of(column: ColumnFacts, table: str) -> ObjectRef:
 def _no_rows(column: ColumnFacts, table: str, parent: ObjectRef) -> ResolutionError:
     return ResolutionError(
         f"{table}.{column.name} references {parent.display}, which has no rows in this run",
-        resolution_hint=f"Generate {parent.display} in the same run, with a count of at least one.",
+        resolution_hint=(
+            f"Generate {parent.display} in the same run, with a count of at least one; or, "
+            "in read-back, list it under existing: to point at the rows it already holds."
+        ),
     )

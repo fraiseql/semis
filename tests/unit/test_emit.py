@@ -37,7 +37,7 @@ def test_prep_seed_opens_no_connection(monkeypatch: pytest.MonkeyPatch, tmp_path
 
 def test_prep_seed_writes_inserts_carrying_the_parents_uuid(tmp_path: Path) -> None:
     continents, countries = (path.read_text() for path in _prep_seed(tmp_path))
-    parent = "02030405-5001-0001-0000-000000000001"
+    parent = "02030405-5001-8001-8000-000000000001"
     assert continents.startswith("INSERT INTO prep_seed.tb_continent")
     assert parent in continents
     assert countries.count(parent) == 2
@@ -57,7 +57,7 @@ def test_a_hierarchy_is_one_prep_seed_file_roots_first(tmp_path: Path) -> None:
         generator, {"catalog.tb_location": 8}, tmp_path, hierarchies={"catalog.tb_location": tree}
     )
     text = seed.path.read_text()
-    first_root = "05060708-5001-0001-0000-000000000001"
+    first_root = "05060708-5001-8001-8000-000000000001"
     assert seed.path.name == "001_prep_seed.tb_location.sql"
     assert text.count(first_root) == 1 + 3  # its own row, then three children
-    assert text.index(first_root) < text.index("05060708-5001-0001-0000-000000000008")
+    assert text.index(first_root) < text.index("05060708-5001-8001-8000-000000000008")

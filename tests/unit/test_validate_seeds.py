@@ -11,7 +11,7 @@ from tests.ddl import CODES, TRINITY
 
 FACTS = SchemaFacts.from_source(TRINITY, table_codes=TableCodes(CODES))
 TWIN = "prep_seed.tb_continent"
-EUROPE = "02030405-5001-0001-0000-000000000001"
+EUROPE = "02030405-5001-8001-8000-000000000001"
 
 
 def _dirs(tmp_path: Path) -> tuple[Path, Path]:

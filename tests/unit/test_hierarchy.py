@@ -19,13 +19,17 @@ FACTS = SchemaFacts.from_source(HIERARCHY, table_codes=TableCodes(HIERARCHY_CODE
 
 
 def _prep_seed(
-    facts: SchemaFacts, counts: dict[str, int], hierarchies: dict[str, Hierarchy]
+    facts: SchemaFacts,
+    counts: dict[str, int],
+    hierarchies: dict[str, Hierarchy],
+    overrides: dict[str, dict[str, object]] | None = None,
 ) -> list[tuple[str, list[Row]]]:
     """A prep-seed walk, each batch remembered before the walk draws the next."""
     resolver = PrepSeedResolver()
     generator = FakeDataGenerator(facts, scenario_id=0x5001, seed=42)
     batches: list[tuple[str, list[Row]]] = []
-    for table, stream in generator.walk(counts, hierarchies=hierarchies, resolver=resolver):
+    walk = generator.walk(counts, hierarchies=hierarchies, overrides=overrides, resolver=resolver)
+    for table, stream in walk:
         rows = list(stream)
         resolver.remember(table, rows)
         batches.append((table.ref.display, rows))
@@ -57,6 +61,28 @@ def test_no_rows_is_one_empty_level() -> None:
 def test_roots_and_fan_out_below_one_are_refused(roots: int, fan_out: int) -> None:
     with pytest.raises(ScenarioError, match="fk_parent_location"):
         Hierarchy(parent="fk_parent_location", roots=roots, fan_out=fan_out)
+
+
+def test_a_tree_of_roots_alone_needs_no_fan_out() -> None:
+    roots = Hierarchy(parent="fk_parent_location", roots=5)
+    assert roots.levels(5) == [range(0, 5)]
+    assert [roots.parent_of(row) for row in range(5)] == [None] * 5
+    batches = _prep_seed(FACTS, {LOCATION: 5}, {LOCATION: roots})
+    assert {row["fk_parent_location"] for _, rows in batches for row in rows} == {None}
+
+
+def test_a_row_with_a_parent_needs_a_fan_out() -> None:
+    roots = Hierarchy(parent="fk_parent_location", roots=5)
+    generator = FakeDataGenerator(FACTS, scenario_id=0x5001, seed=42)
+    with pytest.raises(
+        ScenarioError,
+        match=r"catalog\.tb_location: hierarchy has no fan_out:, and 1 of its 6 rows has a parent",
+    ):
+        generator.walk({LOCATION: 6}, hierarchies={LOCATION: roots})
+    with pytest.raises(ScenarioError, match="has no fan_out"):
+        roots.levels(6)
+    with pytest.raises(ScenarioError, match="has no fan_out"):
+        roots.parent_of(5)
 
 
 def test_prep_seed_child_carries_its_parent_rows_uuid() -> None:
@@ -110,6 +136,49 @@ def test_another_not_null_self_fk_is_refused() -> None:
     generator = FakeDataGenerator(facts, scenario_id=0x5001, seed=42)
     with pytest.raises(ResolutionError, match=r"fk_generic_location is NOT NULL"):
         generator.walk({LOCATION: 3}, hierarchies={LOCATION: TREE})
+
+
+LEFT_NULL = {LOCATION: {"fk_parent_location": None}}
+
+
+def test_a_nullable_self_fk_overridden_null_needs_no_hierarchy() -> None:
+    """A flat set of rows in a self-referencing table: every row a root, in one batch."""
+    batches = _prep_seed(FACTS, {LOCATION: 5}, {}, overrides=LEFT_NULL)
+    assert [len(rows) for _, rows in batches] == [5]
+    assert {row["fk_parent_location"] for _, rows in batches for row in rows} == {None}
+
+
+def test_another_self_fk_still_needs_a_hierarchy_or_its_own_null() -> None:
+    generator = FakeDataGenerator(_facts(SECOND_SELF_FK), scenario_id=0x5001, seed=42)
+    with pytest.raises(ScenarioError, match=r"tb_location\.fk_generic_location references its own"):
+        generator.walk({LOCATION: 3}, overrides=LEFT_NULL)
+    both = {LOCATION: {"fk_parent_location": None, "fk_generic_location": None}}
+    rows = list(next(generator.walk({LOCATION: 3}, overrides=both))[1])
+    assert {(row["fk_parent_location"], row["fk_generic_location"]) for row in rows} == {
+        (None, None)
+    }
+
+
+def test_a_hierarchy_parent_left_null_is_a_contradiction() -> None:
+    generator = FakeDataGenerator(FACTS, scenario_id=0x5001, seed=42)
+    with pytest.raises(
+        ScenarioError,
+        match=r"catalog\.tb_location\.fk_parent_location is the parent of the table's "
+        r"hierarchy, which semis draws: it cannot be overridden null",
+    ):
+        generator.walk({LOCATION: 3}, hierarchies={LOCATION: TREE}, overrides=LEFT_NULL)
+
+
+def test_a_not_null_self_fk_cannot_be_left_null() -> None:
+    facts = _facts(
+        HIERARCHY.replace("fk_parent_location BIGINT", "fk_parent_location BIGINT NOT NULL")
+    )
+    generator = FakeDataGenerator(facts, scenario_id=0x5001, seed=42)
+    with pytest.raises(
+        ScenarioError,
+        match=r"tb_location\.fk_parent_location is NOT NULL, so it cannot be left null",
+    ):
+        generator.walk({LOCATION: 3}, overrides=LEFT_NULL)
 
 
 @pytest.mark.parametrize("parent", ["name", "fk_nowhere"])
@@ -198,3 +267,28 @@ def test_prep_seed_refuses_a_path_and_writes_nothing(tmp_path: Path) -> None:
     with pytest.raises(ScenarioError, match=r"prep-seed.*catalog\.tb_location\.path"):
         emit.prep_seed(generator, {LOCATION: 3}, tmp_path, hierarchies={LOCATION: PATHED})
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_hierarchy_parent_trusted_to_a_trigger_is_refused() -> None:
+    """semis draws the parent column to build the tree: a trigger cannot fill it too."""
+    generator = FakeDataGenerator(FACTS, scenario_id=0x5001, seed=42)
+    with pytest.raises(ScenarioError) as refused:
+        generator.walk(
+            {LOCATION: 3},
+            hierarchies={LOCATION: TREE},
+            trusted={LOCATION: frozenset({"fk_parent_location"})},
+        )
+    assert str(refused.value).splitlines() == [
+        "catalog.tb_location.fk_parent_location is the parent of the table's hierarchy, "
+        "which semis draws: it cannot be trusted to a trigger",
+        "Hint: Drop the hierarchy to leave fk_parent_location to the trigger, or drop "
+        "fk_parent_location from trusts_trigger for a tree.",
+    ]
+
+
+def test_a_self_fk_trusted_to_a_trigger_needs_no_hierarchy() -> None:
+    """The trigger fills it, so semis leaves it out of every row and draws no tree."""
+    generator = FakeDataGenerator(FACTS, scenario_id=0x5001, seed=42)
+    trusted = {LOCATION: frozenset({"fk_parent_location"})}
+    rows = list(next(generator.walk({LOCATION: 3}, trusted=trusted))[1])
+    assert [("fk_parent_location" in row) for row in rows] == [False] * 3

@@ -277,6 +277,16 @@ def test_a_malformed_providers_entry_is_refused_naming_it(
         Project.load(_project(tmp_path, SEMIS_YAML + f"providers: {providers}\n"))
 
 
+def test_a_module_that_does_not_import_is_refused_saying_how_it_imports(tmp_path: Path) -> None:
+    """The semis command's import path is its own installation's, not the directory it
+    runs in: a project's module imports when installed, or on PYTHONPATH."""
+    with pytest.raises(ProjectError) as refused:
+        Project.load(_project(tmp_path, SEMIS_YAML + "providers: [no.such.module:X]\n"))
+    assert refused.value.resolution_hint == (
+        "Install the module, or put the directory that holds it on PYTHONPATH."
+    )
+
+
 def _install(root: Path, distribution: str, entries: dict[str, str]) -> None:
     """*distribution*, installed as far as ``importlib.metadata`` can tell, under *root*."""
     info = root / f"{distribution.replace('-', '_')}-1.0.dist-info"
@@ -383,3 +393,19 @@ def test_a_ddl_directory_holds_the_resolvers_unless_named(tmp_path: Path) -> Non
 def test_a_ddl_file_names_no_resolvers_tree(tmp_path: Path) -> None:
     with pytest.raises(ProjectError, match="no schema directory to read the resolvers from"):
         Project.load(_project(tmp_path)).resolvers()
+
+
+def test_a_project_key_that_is_not_a_string_is_refused_naming_it(tmp_path: Path) -> None:
+    path = tmp_path / "semis.yaml"
+    path.write_text("schema: {ddl: a.sql}\ntable_codes: {}\n1: x\n")
+    with pytest.raises(ProjectError) as refused:
+        Project.load(path)
+    assert str(refused.value).splitlines()[0] == f"{path}: unknown key 1"
+
+
+def test_a_project_file_that_does_not_read_as_yaml_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "semis.yaml"
+    path.write_text("schema: {ddl: a.sql\n")
+    with pytest.raises(ProjectError) as refused:
+        Project.load(path)
+    assert str(refused.value).splitlines()[0].startswith(f"{path} does not read as YAML: ")

@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fraiseql-semis"
-version = "0.1.0"
+version = "0.2.0"
 description = "Semantic UUID-encoded fake data generator for PostgreSQL trinity pattern schemas"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 license = { text = "MIT" }
 authors = [
     { name = "Lionel Hamayon", email = "lionel@fraiseql.dev" }
@@ -27,12 +27,11 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Database",
     "Topic :: Software Development :: Testing",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 
 dependencies = [
@@ -42,15 +41,16 @@ dependencies = [
     # only a UUID column's value for a UUID; resolvers are found by routine name; every
     # level reads the same files; `validate_seeds` takes a connection (1.23). Each
     # staging table's final table is the one its resolver fills, in any schema; a wide
-    # RETURNS TABLE parses (1.24).
-    "fraiseql-confiture>=1.27,<2",
+    # RETURNS TABLE parses (1.24). Floor 1.30: the release semis is measured on, and the
+    # one that sets the Python floor, 3.14.
+    "fraiseql-confiture>=1.30,<2",
     "faker>=24.0.0",
-    "pyyaml>=6.0",
+    "pyyaml>=6.0.1",
     # Read-back mode only: learning a parent's pk after its seed is applied. Schema
     # reading goes through confiture, never through a hand-written catalog query.
-    "psycopg[binary]>=3.1.0",
+    "psycopg[binary]>=3.2.10",
     # The `semis` command, built as confiture's own CLI is.
-    "typer>=0.12",
+    "typer>=0.19",
 ]
 
 [project.optional-dependencies]
@@ -64,7 +64,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/fraiseql/semis"
-Documentation = "https://fraiseql.dev/semis"
+Documentation = "https://semis.fraiseql.dev"
 Repository = "https://github.com/fraiseql/semis"
 "Bug Tracker" = "https://github.com/fraiseql/semis/issues"
 
@@ -75,20 +75,20 @@ semis = "fraiseql_semis.cli:main"
 packages = ["src/fraiseql_semis"]
 
 [tool.hatch.build.targets.sdist]
+# Anchored at the root: an unanchored "src/" is a gitignore pattern, and takes site/src/ too.
 include = [
-    "src/",
-    "tests/",
-    "docs/",
-    "scenarios/",
-    "CHANGELOG.md",
-    "LICENSE",
-    "README.md",
-    "pyproject.toml",
+    "/src/",
+    "/docs/",
+    "/scenarios/",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/README.md",
+    "/pyproject.toml",
 ]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py314"
 # The documents' code blocks are aligned by hand; the formatter would reflow them.
 extend-exclude = ["*.md"]
 
@@ -119,7 +119,15 @@ ignore = [
 ]
 
 [tool.ty.environment]
-python-version = "3.11"
+python-version = "3.14"
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+# Every line and every branch: the whole suite runs where a database is, so CI enforces
+# it in the integration job.
+fail_under = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

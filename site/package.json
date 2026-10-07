@@ -1,0 +1,22 @@
+{
+  "name": "semis-site",
+  "private": true,
+  "type": "module",
+  "description": "The fraiseql-semis documentation, served at https://semis.fraiseql.dev",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check-links": "bun run scripts/check-links.ts dist",
+    "test": "bun test scripts/"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.37.6",
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@tailwindcss/vite": "^4.2.1",
+    "astro": "^5.17.3",
+    "sharp": "^0.34.5",
+    "tailwindcss": "^4.2.1"
+  }
+}

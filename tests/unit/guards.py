@@ -1,6 +1,9 @@
-"""Shared plumbing for the seam guards: the package's modules, parsed."""
+"""Shared plumbing for the guards: the package's modules, parsed, and the files that ship."""
 
 import ast
+import re
+import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[2] / "src" / "fraiseql_semis"
@@ -23,3 +26,26 @@ def imported_roots(tree: ast.Module) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             roots.add(node.module.split(".")[0])
     return roots
+
+
+def tracked_text_files(root: Path) -> list[Path]:
+    """Every text file git tracks under *root*: what ``git archive`` publishes."""
+    listed = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=root, capture_output=True, text=True, check=True
+    )
+    return text_files(root / name for name in listed.stdout.split("\0") if name)
+
+
+def text_files(paths: Iterable[Path]) -> list[Path]:
+    """*paths* that are files holding text: a NUL byte marks a binary one, as git judges."""
+    return [path for path in paths if path.is_file() and b"\0" not in path.read_bytes()[:8000]]
+
+
+def named_in(root: Path, files: Iterable[Path], pattern: re.Pattern[str]) -> list[str]:
+    """The files, relative to *root*, whose name or text *pattern* finds."""
+    return [
+        path.relative_to(root).as_posix()
+        for path in files
+        if pattern.search(path.relative_to(root).as_posix())
+        or pattern.search(path.read_bytes().decode(errors="replace"))
+    ]

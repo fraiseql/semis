@@ -14,6 +14,7 @@ from fraiseql_semis.schema import (
     ObjectRef,
     SchemaFacts,
     TableFacts,
+    TableKeys,
 )
 from tests.ddl import CODES, TRINITY
 
@@ -206,3 +207,14 @@ def test_a_parent_without_a_natural_id_is_refused_as_such() -> None:
     facts = SchemaFacts.from_source(ddl, table_codes=TableCodes(CODES))
     with pytest.raises(ResolutionError, match=r"catalog\.tb_continent, which shows no natural id"):
         _prep_seed_run(facts, {"catalog.tb_continent": 2, "catalog.tb_country": 1})
+
+
+def test_an_existing_parent_needs_no_natural_id() -> None:
+    """Its keys are read, not learned by natural id: children spread over them."""
+    resolver = ReadBackResolver()
+    continent = FACTS.keys_for("catalog.tb_continent")
+    resolver.existing(TableKeys(continent.ref, continent.surrogate_pk, None), [7, 9])
+    column = next(
+        c for c in FACTS.facts_for("catalog.tb_country").columns if c.name == "fk_continent"
+    )
+    assert [resolver.value_for(column, table="catalog.tb_country") for _ in range(3)] == [7, 9, 7]

@@ -31,7 +31,8 @@ class CodeRegistryError(SemisError):
 
 
 class RowContractError(SemisError):
-    """A row refused by the row contract: names the table, the column and the fact (D4)."""
+    """A row refused by the row contract: names the table, the column and the fact (D4),
+    and the scenario, when a scenario's run drew it."""
 
     error_code = "SEMIS_ROWS_001"
 
@@ -50,10 +51,24 @@ class ScenarioError(SemisError):
     default_hint = "The scenario examples in the README show every key a scenario takes."
 
 
+class AlreadyAppliedError(SemisError):
+    """A scenario applied to a database that already holds its rows: refused before a
+    row is written, naming the reset. A scenario applies once, to a reset database."""
+
+    error_code = "SEMIS_APPLY_001"
+
+
 class UnreachableDatabaseError(SemisError):
     """A database semis was told to connect to, which did not answer."""
 
     error_code = "SEMIS_DATABASE_001"
+
+
+class SchemaNotBuiltError(SemisError):
+    """A database that answered, but holds no table the run reads: its schema is not
+    built there."""
+
+    error_code = "SEMIS_DATABASE_002"
 
 
 class ProjectError(SemisError):
@@ -66,8 +81,8 @@ class ProjectError(SemisError):
 class PinError(SemisError):
     """A scenario replayed against a schema whose facts no longer match its pin (D5).
 
-    Carries both digests, and the changes ``diff`` reports when there is a snapshot to
-    compare with.
+    Carries both digests, and what moved between the facts the pin kept and the
+    schema's.
     """
 
     error_code = "SEMIS_PIN_001"

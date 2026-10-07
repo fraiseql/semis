@@ -15,6 +15,7 @@ from importlib.metadata import version
 from fraiseql_semis import emit, readback, seeds
 from fraiseql_semis.codes import TableCodes
 from fraiseql_semis.errors import (
+    AlreadyAppliedError,
     CodeRegistryError,
     IncomparablePinError,
     PinError,
@@ -22,6 +23,7 @@ from fraiseql_semis.errors import (
     ResolutionError,
     RowContractError,
     ScenarioError,
+    SchemaNotBuiltError,
     SemisError,
     UnreachableDatabaseError,
 )
@@ -40,6 +42,7 @@ from fraiseql_semis.project import Project, ProjectSchema
 from fraiseql_semis.resolution import PrepSeedResolver, ReadBackResolver, Resolver
 from fraiseql_semis.rows import Violation, check_row, require_row
 from fraiseql_semis.scenario import (
+    ExistingTable,
     Run,
     Scenario,
     ScenarioEntry,
@@ -58,9 +61,11 @@ __version__ = version("fraiseql-semis")
 
 __all__ = [
     "TEXT_TYPES",
+    "AlreadyAppliedError",
     "CodeRegistryError",
     "ColumnFacts",
     "CustomProviderRegistry",
+    "ExistingTable",
     "FakeDataGenerator",
     "FakerProvider",
     "Hierarchy",
@@ -84,6 +89,7 @@ __all__ = [
     "ScenarioError",
     "ScenarioManager",
     "SchemaFacts",
+    "SchemaNotBuiltError",
     "SchemaPin",
     "SemanticUUIDGenerator",
     "SemisError",

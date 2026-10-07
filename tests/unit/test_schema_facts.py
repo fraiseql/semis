@@ -64,7 +64,11 @@ def test_a_table_without_a_code_is_refused() -> None:
     facts = SchemaFacts.from_source(
         TRINITY, table_codes=TableCodes({"catalog.tb_continent": 0x02030405})
     )
-    with pytest.raises(CodeRegistryError, match=r"catalog\.tb_country"):
+    with pytest.raises(
+        CodeRegistryError,
+        match=r"^catalog\.tb_country has no table code\n"
+        r"Hint: Register it schema-qualified, with a hex code of its own\.$",
+    ):
         facts.facts_for("catalog.tb_country")
 
 

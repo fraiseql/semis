@@ -1,0 +1,95 @@
+---
+/**
+ * Custom SiteTitle — extends Starlight default with a version badge.
+ * Uses Astro.locals.starlightRoute (same as the default component).
+ */
+import { logos } from 'virtual:starlight/user-images';
+import config from 'virtual:starlight/user-config';
+import { SEMIS_VERSION, SEMIS_RELEASES_URL } from '../utils/version';
+
+const { siteTitle, siteTitleHref } = Astro.locals.starlightRoute;
+---
+
+<a href={siteTitleHref} class="site-title sl-flex">
+  {
+    config.logo && logos.dark && (
+      <>
+        <img
+          class:list={{ 'light:sl-hidden print:hidden': !('src' in config.logo) }}
+          alt={config.logo.alt}
+          src={logos.dark.src}
+          width={logos.dark.width}
+          height={logos.dark.height}
+        />
+        {!('src' in config.logo) && (
+          <img
+            class="dark:sl-hidden print:block"
+            alt={config.logo.alt}
+            src={logos.light?.src}
+            width={logos.light?.width}
+            height={logos.light?.height}
+          />
+        )}
+      </>
+    )
+  }
+  <span class:list={{ 'sr-only': config.logo?.replacesTitle }} translate="no">
+    {siteTitle}
+  </span>
+</a>
+
+<a
+  href={SEMIS_RELEASES_URL}
+  class="version-badge"
+  target="_blank"
+  rel="noopener noreferrer"
+  aria-label={`semis version ${SEMIS_VERSION}: releases`}
+>
+  v{SEMIS_VERSION}
+</a>
+
+<style>
+  @layer starlight.core {
+    .site-title {
+      align-items: center;
+      gap: var(--sl-nav-gap);
+      font-size: var(--sl-text-h4);
+      font-weight: 600;
+      color: var(--sl-color-text-accent);
+      text-decoration: none;
+      white-space: nowrap;
+      min-width: 0;
+    }
+    .site-title span {
+      overflow: hidden;
+    }
+    .site-title img {
+      height: calc(var(--sl-nav-height) - 2 * var(--sl-nav-pad-y));
+      width: auto;
+      max-width: 100%;
+      object-fit: contain;
+      object-position: 0 50%;
+    }
+  }
+
+  .version-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.15rem 0.5rem;
+    border-radius: 9999px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    background: color-mix(in srgb, var(--sl-color-accent) 12%, transparent);
+    color: var(--sl-color-accent);
+    border: 1px solid color-mix(in srgb, var(--sl-color-accent) 25%, transparent);
+    text-decoration: none;
+    white-space: nowrap;
+    letter-spacing: 0.01em;
+    transition: background 0.15s ease;
+    flex-shrink: 0;
+  }
+
+  .version-badge:hover {
+    background: color-mix(in srgb, var(--sl-color-accent) 22%, transparent);
+  }
+</style>

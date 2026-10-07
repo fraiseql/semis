@@ -6,8 +6,10 @@ from uuid import UUID
 import pytest
 
 from fraiseql_semis.codes import TableCodes
-from fraiseql_semis.errors import RowContractError
-from fraiseql_semis.generator import FakeDataGenerator
+from fraiseql_semis.errors import RowContractError, ScenarioError
+from fraiseql_semis.faker_provider import CustomProviderRegistry
+from fraiseql_semis.generator import FakeDataGenerator, Row
+from fraiseql_semis.providers import i18n
 from fraiseql_semis.rows import check_row
 from fraiseql_semis.schema import SchemaFacts
 from fraiseql_semis.uuid_generator import SemanticUUIDGenerator
@@ -46,7 +48,7 @@ def test_slug_carries_the_scenario() -> None:
 
 def test_slug_reads_back_against_the_uuid_text() -> None:
     row = _rows(0x5001, seed=42, count=0x42)[-1]
-    assert str(row["id"]).endswith("-5001-0001-0000-000000000042")
+    assert str(row["id"]).endswith("-5001-8001-8000-000000000042")
     assert str(row["identifier"]).endswith("-5001-42")
 
 
@@ -109,3 +111,87 @@ def test_every_row_satisfies_the_contract() -> None:
 
 def test_columns_are_the_same_for_every_row() -> None:
     assert {tuple(row) for row in PRODUCTS} == {tuple(PRODUCTS[0])}
+
+
+CUSTOMER = "shop.tb_customer"
+SHOP = """CREATE SCHEMA shop;
+CREATE TABLE shop.tb_customer (pk_customer bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  id uuid NOT NULL DEFAULT gen_random_uuid() UNIQUE, identifier text NOT NULL UNIQUE,
+  name text NOT NULL, deleted_at timestamptz, created_by uuid, country_code char(2));"""
+
+
+def _customers(registry: CustomProviderRegistry | None = None, **drawn: object) -> list[Row]:
+    facts = SchemaFacts.from_source(SHOP, table_codes=TableCodes({CUSTOMER: 0x0B}))
+    generator = FakeDataGenerator(facts, scenario_id=0x5001, seed=42, providers=registry)
+    return list(generator.generate_rows(CUSTOMER, 3, **drawn))  # ty: ignore[invalid-argument-type]
+
+
+def test_a_nullable_column_nobody_names_is_null() -> None:
+    """fraiseql/semis#1: no row arrives soft-deleted, no audit column points at nobody."""
+    rows = _customers()
+    assert {(row["deleted_at"], row["created_by"]) for row in rows} == {(None, None)}
+    assert all(row["identifier"] and row["name"] for row in rows)
+
+
+def test_a_library_rule_does_not_name_a_column() -> None:
+    """A library says how a column is filled when it is, not whether: a nullable column
+    its rule matches is left NULL."""
+    registry = CustomProviderRegistry()
+    registry.register_library(i18n.LIBRARY)
+    assert {row["country_code"] for row in _customers(registry)} == {None}
+
+
+def test_an_overridden_nullable_column_is_written() -> None:
+    rows = _customers(overrides={"deleted_at": None, "created_by": "a"})
+    assert {row["created_by"] for row in rows} == {"a"}
+
+
+def test_fill_draws_the_columns_it_lists() -> None:
+    rows = _customers(fill=frozenset({"deleted_at"}))
+    assert all(row["deleted_at"] is not None for row in rows)
+    assert {row["created_by"] for row in rows} == {None}
+
+
+def test_a_provider_by_name_draws_a_nullable_column() -> None:
+    registry = CustomProviderRegistry()
+    registry.register_column(CUSTOMER, "created_by", lambda _faker, _column: "me")
+    assert {row["created_by"] for row in _customers(registry)} == {"me"}
+
+
+def test_fill_all_draws_every_column_as_0_1_0_did() -> None:
+    """0.1.0 drew a nullable column as it draws a NOT NULL one, from the same stream."""
+    every = SHOP.replace("timestamptz,", "timestamptz NOT NULL,").replace(
+        "uuid, country_code char(2))", "uuid NOT NULL, country_code char(2) NOT NULL)"
+    )
+    facts = SchemaFacts.from_source(every, table_codes=TableCodes({CUSTOMER: 0x0B}))
+    drawn = list(FakeDataGenerator(facts, scenario_id=0x5001, seed=42).generate_rows(CUSTOMER, 3))
+    assert _customers(fill="all") == drawn
+
+
+REGIONS = SHOP.replace(
+    "country_code char(2));",
+    "country_code char(2), fk_region bigint REFERENCES shop.tb_customer (pk_customer),"
+    " note text DEFAULT 'none');",
+)
+
+
+@pytest.mark.parametrize(
+    ("column", "reason"),
+    [
+        ("nowhere", "is not a column semis writes"),
+        ("pk_customer", "is not a column semis writes"),
+        ("name", "is NOT NULL, so semis always draws it"),
+        ("fk_region", "is a foreign key, whose value comes from the run's mode"),
+        ("note", "has a default, which PostgreSQL applies"),
+        ("created_by", "is trusted to a trigger, which fills it"),
+    ],
+)
+def test_fill_naming_a_column_semis_would_not_leave_null_is_refused(
+    column: str, reason: str
+) -> None:
+    facts = SchemaFacts.from_source(REGIONS, table_codes=TableCodes({CUSTOMER: 0x0B}))
+    generator = FakeDataGenerator(facts, scenario_id=0x5001, seed=42)
+    with pytest.raises(ScenarioError, match=rf"shop\.tb_customer fills {column}, which {reason}"):
+        generator.generate_rows(
+            CUSTOMER, 3, fill=frozenset({column}), trusted=frozenset({"created_by"})
+        )

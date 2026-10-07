@@ -22,5 +22,5 @@ def test_minimal_seed_runs_against_its_schema(tmp_path: Path) -> None:
     continents, countries = (seed.path.read_text() for seed in run.seeds)
     assert all(name in continents for name in ("'Africa'", "'South America'"))
     assert "created_by" not in countries
-    assert countries.count("'03040506-5001-0001-") == 50
+    assert countries.count("'03040506-5001-8001-") == 50
     assert run.notices == ("scenario minimal_seed is unpinned: its schema is not checked",)

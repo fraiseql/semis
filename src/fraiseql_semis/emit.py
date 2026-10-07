@@ -4,14 +4,19 @@ The two FK modes of ARCHITECTURE §5 as two functions, so a caller names its mod
 Each writes one seed file per table, parents first, and returns them in that order.
 """
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from itertools import groupby
 from pathlib import Path
 
 from fraiseql_semis import readback, seeds
-from fraiseql_semis.generator import FakeDataGenerator, Override, Row
+from fraiseql_semis.generator import FakeDataGenerator, Fill, Override, Row
 from fraiseql_semis.hierarchy import Hierarchy, Paths, refuse_path_in_prep_seed
-from fraiseql_semis.resolution import PrepSeedResolver, ReadBackResolver, natural_ids
+from fraiseql_semis.resolution import (
+    EXISTING_BY,
+    PrepSeedResolver,
+    ReadBackResolver,
+    natural_ids,
+)
 from fraiseql_semis.schema import Connection, SeedFile, TableFacts
 from fraiseql_semis.staging import Staging
 
@@ -23,6 +28,7 @@ def prep_seed(  # noqa: PLR0913 — three positionals; how each table is drawn b
     *,
     trusted: Mapping[str, frozenset[str]] | None = None,
     overrides: Mapping[str, Mapping[str, Override]] | None = None,
+    fill: Mapping[str, Fill] | None = None,
     hierarchies: Mapping[str, Hierarchy] | None = None,
     format: seeds.Format | None = None,
     staging: Staging | None = None,
@@ -40,7 +46,12 @@ def prep_seed(  # noqa: PLR0913 — three positionals; how each table is drawn b
     resolver = PrepSeedResolver()
     written: list[SeedFile] = []
     walk = generator.walk(
-        counts, trusted=trusted, overrides=overrides, hierarchies=hierarchies, resolver=resolver
+        counts,
+        trusted=trusted,
+        overrides=overrides,
+        fill=fill,
+        hierarchies=hierarchies,
+        resolver=resolver,
     )
     by_table = groupby(walk, key=lambda batch: batch[0].ref.display)
     for number, (display, batches) in enumerate(by_table, start=1):
@@ -68,23 +79,38 @@ def read_back(  # noqa: PLR0913 — four positionals; how each table is drawn by
     *,
     trusted: Mapping[str, frozenset[str]] | None = None,
     overrides: Mapping[str, Mapping[str, Override]] | None = None,
+    fill: Mapping[str, Fill] | None = None,
     hierarchies: Mapping[str, Hierarchy] | None = None,
     format: seeds.Format | None = None,
+    existing: Mapping[str, Sequence[str] | None] | None = None,
 ) -> list[SeedFile]:
     """Mode B: apply each table on *connection*, learn its keys, then draw its children.
 
-    A hierarchy is applied and learned level by level, one file per level
+    *existing* maps a table the run does not write to the identifiers of the rows its
+    children point at, or to ``None`` for every row: their keys are read before the first
+    table is drawn. A hierarchy is applied and learned level by level, one file per level
     (``NNN_<table>.L<n>.sql``), because its children are its own rows. Everything runs
     in *connection*'s transaction, which stays the caller's: nothing is committed here,
     so a failure anywhere leaves every table to the caller's rollback.
     """
     hierarchies = hierarchies or {}
     resolver = ReadBackResolver()
+    for name, values in (existing or {}).items():
+        keys = generator.facts.keys_for(name)
+        resolver.existing(
+            keys, readback.existing_keys(connection, keys, by=EXISTING_BY, values=values)
+        )
     written: list[SeedFile] = []
     levels: dict[str, int] = {}
     paths: dict[str, Paths] = {}
     walk = generator.walk(
-        counts, trusted=trusted, overrides=overrides, hierarchies=hierarchies, resolver=resolver
+        counts,
+        trusted=trusted,
+        overrides=overrides,
+        fill=fill,
+        hierarchies=hierarchies,
+        resolver=resolver,
+        existing=frozenset(existing or {}),
     )
     for number, (table, stream) in enumerate(walk, start=1):
         # Held, one table or level at a time: applied, then its keys read back by its ids.

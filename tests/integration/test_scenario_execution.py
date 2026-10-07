@@ -1,12 +1,13 @@
 """A scenario file, executed: its tables walked in order, in its declared mode."""
 
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
 import psycopg
 import pytest
 
-from fraiseql_semis import IncomparablePinError, ScenarioManager, SchemaFacts, TableCodes
+from fraiseql_semis import IncomparablePinError, PinError, ScenarioManager, SchemaFacts, TableCodes
 
 SCHEMA = "semis_scn"
 CONTINENT = f"{SCHEMA}.tb_continent"
@@ -81,16 +82,31 @@ def test_minimal_scenario_seeds_two_tables(connection: psycopg.Connection, tmp_p
     assert sorted(fk for (fk,) in countries) == sorted([pk for pk, _ in continents] * 2)
 
 
-def test_a_live_pin_keeps_no_snapshot(connection: psycopg.Connection, tmp_path: Path) -> None:
-    live = SchemaFacts.from_database(connection, schemas=[SCHEMA], table_codes=CODES)
-    manager = ScenarioManager(live)
-    run = manager.execute(
-        manager.load(_scenario(tmp_path)), tmp_path / "out", connection=connection
+def _live(connection: psycopg.Connection) -> ScenarioManager:
+    return ScenarioManager(
+        SchemaFacts.from_database(connection, schemas=[SCHEMA], table_codes=CODES)
     )
-    assert (run.pin.source, run.pin.snapshot) == ("live", None)
-    assert sorted(path.name for path in (tmp_path / "out").glob("schema_pin.*")) == [
-        "schema_pin.yaml"
-    ]
+
+
+def test_a_live_pin_names_the_column_that_moved(
+    connection: psycopg.Connection, tmp_path: Path
+) -> None:
+    """A database: source keeps no DDL, and its refusal still names what moved."""
+    connection.execute(f"ALTER TABLE {COUNTRY} ADD COLUMN note TEXT")
+    manager = _live(connection)
+    first = manager.execute(
+        manager.load(_scenario(tmp_path)), tmp_path / "first", connection=connection
+    )
+    assert (first.pin.source, first.pin.facts) == ("live", "two_tables.facts.json")
+    connection.rollback()
+    connection.execute(f"ALTER TABLE {COUNTRY} ADD COLUMN note TEXT")
+    connection.execute(f"ALTER TABLE {COUNTRY} ALTER note SET NOT NULL")
+    shutil.copy(tmp_path / "first" / "two_tables.facts.json", tmp_path)
+    pinned = tmp_path / "pinned.yaml"
+    pinned.write_text(SCENARIO + first.pin_path.read_text())
+    moved = _live(connection)
+    with pytest.raises(PinError, match=rf"{COUNTRY}\.note: not_null false → true"):
+        moved.execute(moved.load(pinned), tmp_path / "out", connection=connection)
 
 
 def test_a_ddl_pin_replayed_against_a_live_schema_is_incomparable(
@@ -99,7 +115,7 @@ def test_a_ddl_pin_replayed_against_a_live_schema_is_incomparable(
     ddl = ScenarioManager(SchemaFacts.from_source(DDL, table_codes=CODES))
     first = ddl.execute(ddl.load(_scenario(tmp_path)), tmp_path / "first", connection=connection)
     connection.rollback()
-    (tmp_path / "schema_pin.ddl").write_text(DDL)
+    shutil.copy(tmp_path / "first" / "two_tables.facts.json", tmp_path)
     pinned = tmp_path / "pinned.yaml"
     pinned.write_text(SCENARIO + first.pin_path.read_text())
     live = ScenarioManager(

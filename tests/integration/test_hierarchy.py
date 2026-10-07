@@ -40,11 +40,16 @@ def connection(schema: str) -> Iterator[psycopg.Connection]:
 
 
 def _read_back(
-    connection: psycopg.Connection, out: Path, count: int, tree: Hierarchy = TREE
+    connection: psycopg.Connection, out: Path, count: int, tree: Hierarchy | None = TREE
 ) -> list[Path]:
     generator = FakeDataGenerator(FACTS, scenario_id=0x5001, seed=42)
     written = emit.read_back(
-        connection, generator, {LOCATION: count}, out, hierarchies={LOCATION: tree}
+        connection,
+        generator,
+        {LOCATION: count},
+        out,
+        hierarchies={} if tree is None else {LOCATION: tree},
+        overrides={} if tree is not None else {LOCATION: {"fk_parent_location": None}},
     )
     return [seed.path for seed in written]
 
@@ -107,3 +112,18 @@ def test_path_is_parent_path_then_own_pk(connection: psycopg.Connection, tmp_pat
     paths = {pk: path for pk, _, path in rows}
     assert all(path == (f"{paths[up]}.{pk}" if up else f"{pk}") for pk, up, path in rows)
     assert [paths[pk].count(".") for pk, _, _ in rows] == [0] * 2 + [1] * 6 + [2] * 12
+
+
+@pytest.mark.parametrize(
+    "tree",
+    [None, Hierarchy("fk_parent_location", roots=5)],
+    ids=["left-null", "roots-alone"],
+)
+def test_a_flat_set_is_one_seed_of_roots(
+    connection: psycopg.Connection, tmp_path: Path, tree: Hierarchy | None
+) -> None:
+    """Overridden null with no hierarchy, or a tree of roots alone: one file, no parents."""
+    paths = _read_back(connection, tmp_path, 5, tree)
+    parents = connection.execute(f"SELECT fk_parent_location FROM {LOCATION}").fetchall()
+    assert parents == [(None,)] * 5
+    assert len(paths) == 1

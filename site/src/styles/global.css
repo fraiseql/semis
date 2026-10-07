@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+/* Base Tailwind configuration */
+@theme {
+  /* FraiseQL Brand Colors */
+  --color-fraise-50: #fff5f5;
+  --color-fraise-100: #ffe3e3;
+  --color-fraise-200: #ffc9c9;
+  --color-fraise-300: #ffa8a8;
+  --color-fraise-400: #ff8787;
+  --color-fraise-500: #e03131;
+  --color-fraise-600: #c92a2a;
+  --color-fraise-700: #a51d1d;
+  --color-fraise-800: #7a1616;
+  --color-fraise-900: #5c1010;
+
+  /* Override default fonts */
+  --font-family-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-family-mono: 'JetBrains Mono', ui-monospace, 'Fira Code', monospace;
+}

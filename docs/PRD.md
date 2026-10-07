@@ -1,6 +1,6 @@
 # PRD: fraiseql-semis
 
-**Status**: 0.1.0
+**Status**: 0.2.0
 **Reads with**: [ARCHITECTURE.md](./ARCHITECTURE.md) (how it is built, and why),
 [../README.md](../README.md) (how it is used)
 
@@ -71,23 +71,25 @@ Foreign keys are integers, pointing at `pk_*`. APIs and views expose `id`. semis
 ## The semantic UUID
 
 ```
-┌────────────┬──────────┬──────────┬────────────────────────┐
-│ table code │ scenario │ version  │ sequence               │
-│  32 bits   │ 16 bits  │ 16 bits  │ 64 bits                │
-└────────────┴──────────┴──────────┴────────────────────────┘
+┌────────────┬──────────┬───┬──────────┬────┬──────────────────────┐
+│ table code │ scenario │ 8 │ version  │ 10 │ sequence             │
+│  32 bits   │ 16 bits  │ 4 │ 12 bits  │ 2  │ 62 bits              │
+└────────────┴──────────┴───┴──────────┴────┴──────────────────────┘
 
-02030405-5001-0001-0000-000000000042
+02030405-5001-8001-8000-000000000042
 ^^^^^^^^ ^^^^ ^^^^ ^^^^^^^^^^^^^^^^
 tb_continent  5001  v1  sequence 0x42 = 66
 ```
 
-Table codes and scenario ids are written in hex, so the UUID shows the number its
-author typed:
+It is an RFC 9562 version 8 UUID: the `8` that opens the third group is its version, and
+the `8` that opens the fourth its variant, so a validator that accepts any standard UUID
+accepts it. Table codes and scenario ids are written in hex, so the UUID shows the number
+its author typed:
 
 ```python
 >>> from uuid import UUID
 >>> from fraiseql_semis import SemanticUUIDGenerator
->>> SemanticUUIDGenerator(scenario_id=0x5001).decode(UUID("02030405-5001-0001-0000-000000000042"))
+>>> SemanticUUIDGenerator(scenario_id=0x5001).decode(UUID("02030405-5001-8001-8000-000000000042"))
 UUIDFields(table_code=33752069, scenario_id=20481, version=1, sequence=66)
 ```
 
@@ -135,20 +137,24 @@ UUIDFields(table_code=33752069, scenario_id=20481, version=1, sequence=66)
    nothing behind.
 5. **Clear refusals.** Every error names the table, the column and the scenario where
    they apply, and what to do about it.
+6. **Supported platforms.** Python 3.14, and PostgreSQL 16 or later; CI runs the
+   integration suite on the oldest and the newest.
 
 ## Success metrics
 
-| Metric | Target | Measured for 0.1.0 |
+| Metric | Target | Measured for 0.2.0 |
 |---|---|---|
-| Generation rate | 10,000 rows/s | 21,500 rows/s |
-| 100,000 rows written and applied | under 2 minutes | 15 s |
-| Referential integrity of generated data | 100% | every FK points at a row of the run, or is a declared `NULL` |
+| Generation rate | 10,000 rows/s | 55,000 rows/s |
+| 100,000 rows written and applied | under 2 minutes | 11 s |
+| Referential integrity of generated data | 100% | every FK points at a row of the run, a row an `existing:` table holds, or is a declared `NULL` |
 
 ---
 
 ## Out of scope
 
-- Reading `information_schema`, ordering tables, writing SQL by hand: confiture's.
+- Reading `information_schema`, ordering tables, writing seed SQL: confiture's. semis'
+  only SQL is the handful of parameterised statements in one module, for read-back, the
+  re-apply check and its lock.
 - Generating DDL or migrations.
 - Evaluating CHECK expressions: PostgreSQL judges them at apply time.
 - Owning a project's prep-seed resolvers: they are the project's, and confiture checks

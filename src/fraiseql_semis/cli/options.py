@@ -36,9 +36,21 @@ Format = Annotated[
     SeedFormat | None,
     typer.Option(help="The writer: insert or copy (default: the mode's own).", show_default=False),
 ]
-DryRun = Annotated[
+DryRunWrite = Annotated[
     bool,
-    typer.Option("--dry-run", help="Generate and check every row, then write and apply nothing."),
+    typer.Option("--dry-run", help="Generate and check every row, then write nothing."),
+]
+DryRunApply = Annotated[
+    bool,
+    typer.Option("--dry-run", help="Apply every row, then roll back: nothing is kept."),
+]
+DryRunInMode = Annotated[
+    bool,
+    typer.Option(
+        "--dry-run",
+        help="Read-back applies every row and rolls back; prep-seed writes no file: nothing "
+        "is kept.",
+    ),
 ]
 NoPin = Annotated[
     bool,
@@ -59,6 +71,7 @@ ScenarioId = Annotated[
     typer.Option(
         help="The scenario id the UUIDs carry, in hex (0x5001).",
         parser=lambda text: int(text, 0),
+        metavar="<hex>",
         show_default=False,
     ),
 ]

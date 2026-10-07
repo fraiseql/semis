@@ -1,0 +1,713 @@
+/**
+ * FraiseQL Design System
+ * A-Tier visual quality tokens and overrides
+ */
+
+/* ============================================
+   Design Tokens
+   ============================================ */
+
+:root {
+  /* Brand Colors - FraiseQL Strawberry */
+  --fraise-50: #fff5f5;
+  --fraise-100: #ffe3e3;
+  --fraise-200: #ffc9c9;
+  --fraise-300: #ffa8a8;
+  --fraise-400: #ff8787;
+  --fraise-500: #e03131;
+  --fraise-600: #c92a2a;
+  --fraise-700: #a51d1d;
+  --fraise-800: #7a1616;
+  --fraise-900: #5c1010;
+
+  /* Neutrals - Modern Gray Scale */
+  --gray-50: #fafafa;
+  --gray-100: #f4f4f5;
+  --gray-200: #e4e4e7;
+  --gray-300: #d4d4d8;
+  --gray-400: #a1a1aa;
+  --gray-500: #71717a;
+  --gray-600: #52525b;
+  --gray-700: #3f3f46;
+  --gray-800: #27272a;
+  --gray-900: #18181b;
+  --gray-950: #09090b;
+
+  /* Typography */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Fira Code', monospace;
+
+  /* Spacing Scale (8px base) */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-20: 5rem;
+  --space-24: 6rem;
+  --space-32: 8rem;
+
+  /* Border Radius */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-base: 200ms ease;
+  --transition-slow: 300ms ease;
+}
+
+/* ============================================
+   Starlight Theme Overrides
+   ============================================ */
+
+:root {
+  /* Override Starlight accent color */
+  --sl-color-accent-low: var(--fraise-100);
+  --sl-color-accent: var(--fraise-500);
+  --sl-color-accent-high: var(--fraise-700);
+
+  /* Typography */
+  --sl-font: var(--font-sans);
+  --sl-font-mono: var(--font-mono);
+
+  /* Text sizing - optimized for readability */
+  --sl-text-body: 1.0625rem;
+  --sl-line-height: 1.8;
+  --sl-line-height-headings: 1.4;
+
+  /* Content width */
+  --sl-content-width: 50rem;
+  --sl-sidebar-width: 18rem;
+}
+
+/* Dark mode overrides */
+:root[data-theme='dark'] {
+  --sl-color-accent-low: var(--fraise-900);
+  --sl-color-accent: var(--fraise-400);
+  --sl-color-accent-high: var(--fraise-200);
+}
+
+/* ============================================
+   Typography Enhancements
+   ============================================ */
+
+body {
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Headings */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+h1 {
+  font-size: 2.5rem;
+  line-height: 1.2;
+  margin-bottom: 1.5rem;
+}
+
+h2 {
+  font-size: 1.875rem;
+  line-height: 1.25;
+  margin-bottom: 1.25rem;
+  margin-top: 2rem;
+}
+
+h3 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin-bottom: 1rem;
+  margin-top: 1.5rem;
+}
+
+h4 {
+  font-size: 1.25rem;
+  line-height: 1.4;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+h5 {
+  font-size: 1.125rem;
+  line-height: 1.4;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  margin-top: 1rem;
+}
+
+h6 {
+  font-size: 1.0625rem;
+  line-height: 1.4;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  margin-top: 1rem;
+}
+
+/* Paragraph and text spacing */
+p {
+  margin-bottom: 1.25rem;
+}
+
+/* Inline code styling — scoped to avoid interfering with ExpressiveCode pre blocks */
+:not(pre) > code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  font-feature-settings: 'liga' 0;
+  background: var(--gray-100);
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+}
+
+:root[data-theme='dark'] :not(pre) > code {
+  background: var(--gray-800);
+}
+
+/* ============================================
+   Component Enhancements
+   ============================================ */
+
+/* Links */
+a {
+  transition: color var(--transition-fast);
+}
+
+a:hover {
+  color: var(--fraise-500);
+}
+
+/* Starlight logo link — override Tailwind @layer base which beats @layer starlight.core */
+a.site-title {
+  text-decoration: none;
+}
+
+/* Buttons */
+.sl-button,
+button[type="submit"] {
+  border-radius: var(--radius-md);
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+
+.sl-button:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+/* Cards */
+.card {
+  border-radius: var(--radius-lg);
+  transition: all var(--transition-base);
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+/* ============================================
+   Sidebar Enhancements
+   ============================================ */
+
+.sidebar-content {
+  padding: var(--space-4);
+}
+
+.sidebar-content a {
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  transition: all var(--transition-fast);
+}
+
+.sidebar-content a:hover {
+  background: var(--fraise-50);
+}
+
+:root[data-theme='dark'] .sidebar-content a:hover {
+  background: var(--fraise-900);
+}
+
+/* Active sidebar item */
+.sidebar-content a[aria-current="page"] {
+  background: var(--fraise-100);
+  color: var(--fraise-700);
+  font-weight: 500;
+}
+
+:root[data-theme='dark'] .sidebar-content a[aria-current="page"] {
+  background: var(--fraise-900);
+  color: var(--fraise-300);
+}
+
+/* ============================================
+   Code Block Enhancements
+   Modern, minimal aesthetic (Vercel/Stripe style)
+   ============================================ */
+
+.expressive-code {
+  margin: var(--space-6) 0;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+:root[data-theme='dark'] .expressive-code {
+  border-color: var(--gray-700);
+}
+
+.expressive-code pre {
+  border-radius: 0 !important;
+  padding: var(--space-4) !important;
+  background: var(--gray-50) !important;
+  margin: 0 !important;
+}
+
+:root[data-theme='dark'] .expressive-code pre {
+  background: var(--gray-950) !important;
+}
+
+/* Code block header (filename) */
+.expressive-code .header {
+  background: var(--gray-100);
+  border-bottom: 1px solid var(--gray-200);
+  padding: var(--space-3) var(--space-4);
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  color: var(--gray-600);
+  font-weight: 500;
+}
+
+:root[data-theme='dark'] .expressive-code .header {
+  background: var(--gray-800);
+  border-bottom-color: var(--gray-700);
+  color: var(--gray-400);
+}
+
+/* Copy button - clean integration */
+.expressive-code .copy button {
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: 1px solid var(--gray-300);
+  color: var(--gray-600);
+  transition: all var(--transition-fast);
+  font-size: 0.875rem;
+}
+
+:root[data-theme='dark'] .expressive-code .copy button {
+  border-color: var(--gray-600);
+  color: var(--gray-400);
+}
+
+.expressive-code .copy button:hover {
+  background: var(--fraise-50);
+  border-color: var(--fraise-500);
+  color: var(--fraise-600);
+}
+
+:root[data-theme='dark'] .expressive-code .copy button:hover {
+  background: var(--fraise-950);
+  border-color: var(--fraise-600);
+  color: var(--fraise-400);
+}
+
+/* Terminal frame styling - minimal, clean */
+.expressive-code figure.is-terminal {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--gray-200);
+}
+
+:root[data-theme='dark'] .expressive-code figure.is-terminal {
+  border-color: var(--gray-700);
+}
+
+/* Hide the entire header for terminal blocks without titles */
+.expressive-code .frame.is-terminal > .header {
+  display: none !important;
+}
+
+/* Terminal code area - no rounded corners (container handles it) */
+.expressive-code .frame.is-terminal pre {
+  border-radius: 0 !important;
+  background: var(--gray-50) !important;
+}
+
+:root[data-theme='dark'] .expressive-code .frame.is-terminal pre {
+  background: var(--gray-950) !important;
+}
+
+/* ============================================
+   List Enhancements
+   ============================================ */
+
+.sl-markdown-content ul {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+  margin: var(--space-4) 0;
+}
+
+.sl-markdown-content ul ul {
+  list-style-type: circle;
+  margin: var(--space-2) 0;
+}
+
+.sl-markdown-content ul ul ul {
+  list-style-type: square;
+}
+
+.sl-markdown-content ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+  margin: var(--space-4) 0;
+}
+
+.sl-markdown-content ol ol {
+  list-style-type: lower-alpha;
+  margin: var(--space-2) 0;
+}
+
+.sl-markdown-content li {
+  margin: var(--space-1) 0;
+}
+
+/* Ensure list markers are visible */
+.sl-markdown-content ul li::marker,
+.sl-markdown-content ol li::marker {
+  color: var(--gray-600);
+}
+
+:root[data-theme='dark'] .sl-markdown-content ul li::marker,
+:root[data-theme='dark'] .sl-markdown-content ol li::marker {
+  color: var(--gray-400);
+}
+
+/* ============================================
+   Table Enhancements
+   ============================================ */
+
+.sl-markdown-content table {
+  width: max-content;
+  max-width: 100%;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--gray-200);
+  margin: var(--space-5) 0;
+  font-size: 0.875rem;
+  border-collapse: collapse;
+}
+
+:root[data-theme='dark'] .sl-markdown-content table {
+  border-color: var(--gray-700);
+}
+
+/* Table header */
+.sl-markdown-content th {
+  background: var(--gray-100);
+  font-weight: 600;
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--gray-600);
+  border-bottom: 1px solid var(--gray-200);
+}
+
+:root[data-theme='dark'] .sl-markdown-content th {
+  background: var(--gray-800);
+  color: var(--gray-400);
+  border-bottom-color: var(--gray-700);
+}
+
+/* Table cells */
+.sl-markdown-content td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--gray-100);
+  vertical-align: top;
+}
+
+:root[data-theme='dark'] .sl-markdown-content td {
+  border-bottom-color: var(--gray-800);
+}
+
+/* First column: code-like styling */
+.sl-markdown-content td:first-child {
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--fraise-600);
+  font-weight: 500;
+}
+
+:root[data-theme='dark'] .sl-markdown-content td:first-child {
+  color: var(--fraise-400);
+}
+
+/* Middle columns: code styling for types */
+.sl-markdown-content td:not(:first-child):not(:last-child) {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--gray-600);
+  white-space: nowrap;
+}
+
+:root[data-theme='dark'] .sl-markdown-content td:not(:first-child):not(:last-child) {
+  color: var(--gray-400);
+}
+
+/* Last column: description - normal text */
+.sl-markdown-content td:last-child {
+  white-space: normal;
+  color: var(--gray-600);
+}
+
+:root[data-theme='dark'] .sl-markdown-content td:last-child {
+  color: var(--gray-400);
+}
+
+/* Hover state */
+.sl-markdown-content tbody tr:hover td {
+  background: var(--fraise-50);
+}
+
+:root[data-theme='dark'] .sl-markdown-content tbody tr:hover td {
+  background: var(--gray-800);
+}
+
+/* Last row: no border */
+.sl-markdown-content tr:last-child td {
+  border-bottom: none;
+}
+
+/* ============================================
+   Language Tabs Enhancements
+   ============================================ */
+
+/* Tab container */
+.starlight-tabs {
+  margin: var(--space-6) 0;
+}
+
+/* Tab list (the row of tab buttons) - remove full-width border */
+starlight-tabs [role="tablist"] {
+  border-bottom: none !important;
+}
+
+/* Individual tab buttons - use box-shadow for underline (matching Starlight's approach) */
+starlight-tabs .tab > [role="tab"] {
+  --sl-tab-color-border: var(--gray-300);
+  padding: var(--space-3) var(--space-5);
+  font-weight: 500;
+  font-size: 0.875rem;
+  color: var(--gray-600);
+  box-shadow: 0 2px 0 var(--sl-tab-color-border);
+  transition: all var(--transition-fast);
+}
+
+:root[data-theme='dark'] starlight-tabs .tab > [role="tab"] {
+  --sl-tab-color-border: var(--gray-600);
+}
+
+starlight-tabs .tab > [role="tab"]:hover {
+  color: var(--gray-700);
+}
+
+:root[data-theme='dark'] starlight-tabs .tab > [role="tab"]:hover {
+  color: var(--gray-300);
+}
+
+/* Active tab */
+starlight-tabs .tab > [role="tab"][aria-selected="true"] {
+  --sl-tab-color-border: var(--fraise-500);
+  color: var(--fraise-600);
+  font-weight: 600;
+}
+
+:root[data-theme='dark'] starlight-tabs .tab > [role="tab"][aria-selected="true"] {
+  --sl-tab-color-border: var(--fraise-400);
+  color: var(--fraise-400);
+}
+
+/* Tab panel (content area) */
+.starlight-tabs [role="tabpanel"] {
+  padding: var(--space-4) 0 0 0;
+}
+
+/* Remove extra margin from first element in tab panel */
+.starlight-tabs [role="tabpanel"] > :first-child {
+  margin-top: 0;
+}
+
+/* Code blocks inside tabs - tighter spacing */
+.starlight-tabs .expressive-code {
+  margin: var(--space-4) 0;
+}
+
+/* ============================================
+   Callout/Admonition Enhancements
+   ============================================ */
+
+.starlight-aside {
+  border-radius: var(--radius-lg);
+  border-left-width: 4px;
+  padding: var(--space-4);
+  margin: var(--space-6) 0;
+}
+
+.starlight-aside--tip {
+  border-left-color: var(--fraise-500);
+  background: var(--fraise-50);
+}
+
+:root[data-theme='dark'] .starlight-aside--tip {
+  background: var(--fraise-950);
+}
+
+/* ============================================
+   Search Enhancements
+   ============================================ */
+
+.search-input {
+  border-radius: var(--radius-lg);
+  transition: all var(--transition-fast);
+}
+
+.search-input:focus {
+  box-shadow: 0 0 0 3px var(--fraise-100);
+  border-color: var(--fraise-500);
+}
+
+/* ============================================
+   Footer
+   ============================================ */
+
+footer {
+  border-top: 1px solid var(--gray-200);
+  margin-top: var(--space-16);
+  padding: var(--space-8) 0;
+}
+
+:root[data-theme='dark'] footer {
+  border-color: var(--gray-800);
+}
+
+/* ============================================
+   Responsive Adjustments
+   ============================================ */
+
+@media (max-width: 768px) {
+  h1 {
+    font-size: 2rem;
+  }
+
+  h2 {
+    font-size: 1.5rem;
+  }
+
+  h3 {
+    font-size: 1.25rem;
+  }
+
+  .expressive-code pre {
+    border-radius: var(--radius-md) !important;
+  }
+}
+
+/* ============================================
+   Keyboard Navigation & Focus
+   ============================================ */
+
+/* Focus indicators for keyboard navigation */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid var(--fraise-500);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Dark mode focus colors */
+:root[data-theme='dark'] a:focus-visible,
+:root[data-theme='dark'] button:focus-visible,
+:root[data-theme='dark'] input:focus-visible,
+:root[data-theme='dark'] select:focus-visible,
+:root[data-theme='dark'] textarea:focus-visible {
+  outline-color: var(--fraise-400);
+}
+
+/* Focus within containers */
+.sl-markdown-content a:focus-visible {
+  border-radius: var(--radius-sm);
+}
+
+/* ============================================
+   Print Styles
+   ============================================ */
+
+@media print {
+  .sidebar,
+  .search,
+  .theme-toggle,
+  .copy-button,
+  footer {
+    display: none !important;
+  }
+
+  main {
+    max-width: 100%;
+    padding: 0;
+  }
+
+  /* Prevent page breaks within content blocks */
+  pre,
+  code,
+  .card,
+  table {
+    page-break-inside: avoid;
+  }
+
+  /* Ensure headings don't orphan */
+  h1, h2, h3, h4, h5, h6 {
+    page-break-after: avoid;
+  }
+
+  /* Links should be visible in print */
+  a {
+    text-decoration: underline;
+  }
+
+  /* Ensure good contrast for printed output */
+  body {
+    background: white;
+    color: black;
+  }
+
+  /* Reduce margins for print efficiency */
+  .sl-markdown-content {
+    line-height: 1.5;
+  }
+}

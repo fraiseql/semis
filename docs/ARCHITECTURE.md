@@ -2,7 +2,7 @@
 
 **Version**: 1.0
 **Date**: 2026-09-23
-**Depends on**: `fraiseql-confiture>=1.27,<2`
+**Depends on**: `fraiseql-confiture>=1.30,<2`, Python 3.14
 **Companion documents**: [PRD.md](./PRD.md) (what semis is for), [../README.md](../README.md) (how it is used)
 
 > Every confiture behaviour this document states was measured against a trinity-pattern
@@ -39,7 +39,6 @@ the second kind only, and asks `confiture.platform` the first kind every time.
 | What must a value respect — type, NOT NULL, UNIQUE, CHECK, enum, FK target | `column_facts` |
 | Which column is the surrogate key, which the natural id | `naming_hints` |
 | How a seed file is written, applied, validated | `write_copy_seed` / `write_insert_seed`, `apply_seeds`, `validate_seeds` |
-| What a schema changed between two revisions | `diff`, `tier_of` |
 | **What a value looks like** | **semis** — Faker, locales, domain providers |
 | **Which rows exist, how many, in what scenario** | **semis** — scenarios |
 | **What identifies a row** | **semis** — the semantic UUID encoding |
@@ -252,19 +251,38 @@ The read-back joins on the UUID semis encoded — never `LIMIT 1`, which would p
 child at one parent, and never an integer semis guessed. Children are distributed over
 the parents found, round-robin.
 
-This is the only SQL in the package, in two shapes — learning keys, and setting a
-hierarchy's paths from them (below):
+This is the only SQL in the package: taking a scenario's lock before an apply (D37);
+asking whether its rows are already applied (D34); reading the keys of an existing table's rows, every one or those `where:` names
+(D36); learning keys; and setting a hierarchy's paths from them (below):
 
 ```sql
+SELECT pg_advisory_xact_lock(%s, %s)
+
+SELECT EXISTS (SELECT FROM <schema>.<table> WHERE <natural_id> BETWEEN %s AND %s)
+
+SELECT <surrogate_pk> FROM <schema>.<table> ORDER BY <surrogate_pk>
+
+SELECT <identifier>, <surrogate_pk> FROM <schema>.<table> WHERE <identifier> = ANY(%s)
+
 SELECT <surrogate_pk>, <natural_id> FROM <schema>.<table> WHERE <natural_id> = ANY(%s)
 
 UPDATE <schema>.<table> AS t SET <path> = v.path::ltree
   FROM unnest(%s::uuid[], %s::text[]) AS v(id, path) WHERE t.<natural_id> = v.id
 ```
 
-Every identifier in them comes from `naming_hints`, `ObjectRef` or the scenario's
-`hierarchy.path` checked against `writable_columns`, composed with
-`psycopg.sql.Identifier`; the UUIDs and the paths are parameters.
+Every identifier in them comes from `naming_hints`, `ObjectRef`, the `identifier` column
+or the scenario's `hierarchy.path` checked against `writable_columns`, composed with
+`psycopg.sql.Identifier`; the lock's keys, the UUIDs, the identifiers and the paths are
+parameters. All of them but the lock run on the caller's connection, inside the run's
+transaction; the lock is taken on a connection of its own, held until that transaction
+ends (D37).
+
+A table the schema's own DDL fills — reference rows — is read, not generated: a
+read-back scenario lists it under `existing:`, and before the first table is drawn its
+keys are read and offered to the resolver as learned keys are, so children spread over
+them the same way. It needs no table code, since semis encodes no UUID for it, and the
+pin covers its keys. Prep-seed refuses it: a child would carry its parent's UUID, and
+rows semis did not write have none it can know.
 
 ### Hierarchies: a table that references itself
 
@@ -287,7 +305,9 @@ breadth-first, a level at a time:
 The first `roots` rows are roots and carry `NULL`; row *k* after them points at row
 *(k − roots) // fan_out*. The parent column must be nullable, since a root has no parent
 (D17). Any other self-FK on the table is written `NULL`, and refused when it is NOT NULL
-(D18).
+(D18). A tree of roots alone needs no `fan_out`; a flat set needs no `hierarchy:` at all,
+only its nullable self-FK overridden `null`, and a hierarchy's own parent overridden `null`
+is refused as a contradiction (D16).
 
 - **prep-seed** writes the table as one file, roots first; a child's parent column carries
   its parent row's UUID, as any FK does in this mode.
@@ -417,10 +437,11 @@ Reproducibility is the product. What holds:
   on the UUID. A read-back seed file is an artifact of a run, not
   a reviewable document.
 
-### Replaying a scenario is refused by the schema
+### Replaying a scenario is refused
 
 A scenario applied twice into one database collides on its own encoded values, because the
-UUID is a function of the scenario and the sequence rather than of the run:
+UUID is a function of the scenario and the sequence rather than of the run. Applied by
+hand, its seeds are refused by the schema:
 
 ```
 SeedError: Failed to execute seed file rb.sql: duplicate key value violates unique
@@ -429,7 +450,21 @@ SeedError: Failed to execute seed file rb.sql: duplicate key value violates uniq
 
 semis relies on this rather than tracking what it has applied: a scenario is a statement
 about what a database contains, and PostgreSQL is the one that knows whether it already
-does. The `identifier` slug therefore carries the scenario's own discipline — it is unique
+does. `semis apply` asks it before anything is written — one `EXISTS` per table the run
+writes into, on the natural id's range for the table code and the scenario id
+(`scenario_bounds`), skipping a table with no `id` column or whose `id` is not a uuid — and refuses with `AlreadyAppliedError`, naming the reset (D34).
+The reset empties the run's tables and no other: every name quoted, and no `CASCADE`.
+When a table the run does not write references one of them, PostgreSQL refuses it and
+empties nothing, which `tests/integration/test_cli_apply.py` pins:
+
+```text
+ERROR:  cannot truncate a table referenced in a foreign key constraint
+DETAIL:  Table "tb_city" references "tb_country".
+HINT:  Truncate table "tb_city" at the same time, or use TRUNCATE ... CASCADE.
+```
+
+Whether that table's rows may go too is the reader's call, not semis'. There is no upsert: `ON CONFLICT DO NOTHING` would hide a scenario that drifted from the
+rows it once wrote. The `identifier` slug therefore carries the scenario's own discipline — it is unique
 within a scenario and distinct across scenarios sharing a database — for the same reason
 the UUID does.
 
@@ -476,15 +511,16 @@ that produced it:
 schema_pin:
   source: ddl              # ddl | live — a pin is comparable only with its own kind
   digest: sha256:b02f4b364d06650c…
-  confiture: "1.18.0"
+  confiture: "1.30.0"
   taken: 2026-09-23
-  snapshot: schema_pin.ddl # the DDL digested, beside the scenario; ddl pins from a source only
+  facts: minimal_seed.facts.json # the facts digested, kept beside the scenario
 ```
 
-A run writes this block to `schema_pin.yaml` beside its seeds, and the DDL it read to
-`schema_pin.ddl` — not `.sql`, since confiture's directory readers take every `*.sql` as a
-seed and would apply the snapshot (D27); the author copies both beside the scenario to pin it. semis never
-rewrites a scenario file, and a scenario without a pin runs and says it is unpinned.
+A run writes this block to `schema_pin.yaml` beside its seeds, and the projection it
+digested to `<scenario>.facts.json`, keys sorted (D35); the author pastes the block into
+the scenario and copies the facts file beside it, to pin it. Loading a pinned scenario reads the facts back and refuses a file whose
+digest is not the pin's, so a stale or swapped copy cannot name the wrong changes. semis
+never rewrites a scenario file, and a scenario without a pin runs and says it is unpinned.
 
 The projection holds, per scenario table in `dependency_order`: the table's display name, its
 `surrogate_pk` and `natural_id`, and for each writable column its name, `type_key`,
@@ -500,15 +536,13 @@ Two consequences, both measured, both wanted:
   generated row — or make one refusable under §6 — does.
 
 On replay: same source kind and same digest, the run proceeds. Different digest, it is
-refused, and semis reports what moved by calling `diff` on the pinned snapshot and the
-current source. A pin of a different source kind is refused *as incomparable*, with the
-reason, not reported as a mismatch.
-
-`diff` takes sources, not models (`diff(model, model)` raises `TypeError`,
-`tests/contract/test_diff_reads_sources.py`), so
-the snapshot is what makes the comparison readable. A `live` pin has no DDL to keep, and
-confiture publishes no call returning an env build's text, so a pin from either is refused
-with its two digests alone, saying `diff` has nothing to compare.
+refused, and semis reports what moved by comparing the projection the pin kept with the
+schema's (`describe_changes`): a table or staging twin added or removed, a trinity role,
+a column added, removed or moved, each changed fact with both values —
+`catalog.tb_country.name: not_null false → true`. Comparing the projection is sufficient
+and exact: a change outside it cannot move the digest, and every change inside it does.
+It is the same for every source, `ddl:`, `env:` or `database:`. A pin of a different
+source kind is refused *as incomparable*, with the reason, not reported as a mismatch.
 
 `--no-pin` skips the check for the one run and says so in the output. There is no config
 setting that turns it off permanently.
@@ -532,7 +566,9 @@ SemisError(ConfiturError-shaped: message, error_code, exit_code, resolution_hint
 ├── ResolutionError    no parent row to point a foreign key at
 ├── CodeRegistryError  a table with no code, or two tables with the same one
 ├── PinError           a digest mismatch, or a pin of an incomparable source kind
-├── UnreachableDatabaseError  a database URL nothing answers at — named by host, port and database
+├── AlreadyAppliedError  a scenario applied to a database that already holds its rows
+├── UnreachableDatabaseError  a database URL nothing answers at, or a malformed one — named by host, port and database
+├── SchemaNotBuiltError  a database that holds no table the run reads: its schema is not built there
 └── ProjectError       a semis.yaml that does not load, or a command with no project
 ```
 
@@ -565,7 +601,8 @@ and exits 1 on a `CRITICAL` or `ERROR`, as `list-scenarios` exits 1 on a shared 
 | **#530** | level 3 judged a key with no `REFERENCES` — a key into a partitioned table cannot have one — by its name, so a role-named key its resolver maps was an ERROR | 1.27 | pinned by a contract test: the key is resolved by what its resolver joins |
 | **#537** | a `--database-url` refused as `CONFIG_003` was repeated whole, password included | 1.27 | pinned by a contract test; semis still masks a URL's password in whatever a refusal prints (§9) |
 
-The floor is 1.27: 1.27 closes #530 and #537, and is the release semis is measured on.
+The floor is 1.30, the release semis is measured on; it requires Python 3.14, and so does
+semis.
 The explicit file lists are what semis would do anyway, so they stay.
 
 ---
@@ -606,7 +643,7 @@ semis does not:
 | D13 | A schema is read by `from_source` (DDL) or `from_env` (an environment's build), never one constructor taking both | measured |
 | D14 | The table-code registry is keyed by the **qualified** name (`catalog.tb_continent`): `catalog.tb_city` and `etl.tb_city` are two tables and must be two codes | this document |
 | D15 | `SemanticUUIDGenerator.previous(table_code)` takes a code, not a table name: the sequence counters are keyed by code, and a name would need the registry a second time | this document |
-| D16 | A self-referencing table needs a declared `hierarchy:` (`parent`, `roots`, `fan_out`), drawn breadth-first; without one it is refused, naming the column | owner, 2026-09-23 |
+| D16 | A self-referencing table needs a declared `hierarchy:` (`parent`, `roots`, and `fan_out` when there are more rows than roots), drawn breadth-first, or each self-FK overridden `null` for a flat set; otherwise it is refused, naming the column | owner, 2026-09-23; amended 2026-10-05 (fraiseql/semis#3) |
 | D17 | A NOT NULL self-FK is refused: a root cannot point at itself before PostgreSQL gives it a key | owner, 2026-09-23 |
 | D18 | A self-FK other than the declared parent is written `NULL` when nullable, and refused when NOT NULL | owner, 2026-09-23 |
 | D19 | Read-back applies and learns a hierarchy level by level, one seed file per level; prep-seed writes it as one file | owner, 2026-09-23 |
@@ -617,22 +654,32 @@ semis does not:
 | D24 | `apply` is one transaction, committed at the end; `--dry-run` on read-back runs it and rolls back | owner, 2026-09-23 |
 | D25 | `semis.yaml` names the providers: a shipped library by name, a project's own as `module:attribute`, imported and never evaluated; an enabled library draws the columns its rules match by name and type, after a scenario's `providers:` and an enum, before the built-ins | owner, 2026-09-23 |
 | D26 | A prep-seed run writes each catalog table into its staging twin, `<prep_seed_schema>.<table>`, each foreign key as `<fk>_id` | owner, 2026-09-23, measured |
-| D27 | A run's DDL snapshot is `schema_pin.ddl`, so no directory reader takes it for a seed | owner, 2026-09-23, measured |
+| D27 | Superseded by D35: a run's DDL snapshot was `schema_pin.ddl`, so no directory reader took it for a seed | owner, 2026-09-23, measured; superseded 2026-10-05 |
 | D28 | Dropped: a refusal of resolver files level 3 would skip (#385), made needless when 1.23 found resolvers by routine name | owner, 2026-09-26 |
-| D29 | A nullable foreign key to another table may be overridden `null`, per column: written `NULL`, its parent not required; a NOT NULL or self-referencing key overridden `null` is refused | owner, 2026-09-27, measured |
+| D29 | A nullable foreign key may be overridden `null`, per column: written `NULL`, its parent not required, and a self-FK so left needs no hierarchy; a NOT NULL key overridden `null` is refused | owner, 2026-09-27, measured; amended 2026-10-05 (fraiseql/semis#3) |
 | D30 | Every date, time and timestamp is drawn from a fixed window (1970 to 2026), never up to *now*, so D10 holds whenever a run is made | measured |
 | D31 | An installed package's `Library`, registered under the `fraiseql_semis.providers` entry point, is enabled by its short name as a shipped one is; installing enables nothing, only the named entry point is imported, and a name claimed twice or shipped is refused | owner, 2026-09-30 |
+| D32 | A semantic UUID is an RFC 9562 version 8 UUID: version 12 bits and sequence 62, where 0.1.0 gave them 16 and 64; strict validators (Zod 4, npm `uuid` from 10.0) refused the 0.1.0 layout; `decode` does not read it, as every user re-seeds | owner, 2026-10-04, measured |
+| D33 | A nullable value column is written `NULL` unless the scenario names it: an override, a provider registered for it by name, or the table's `fill:` (`all`: every one); a library rule matching it does not name it, and the run names the columns it left `NULL` | owner, 2026-10-05 (fraiseql/semis#1) |
+| D34 | A scenario applies once, to a reset database: `apply` refuses a database holding any row in the scenario's UUID range of a table it writes into (in prep-seed, its twin too), skipping a table with no `id` column or whose `id` is not a uuid, before anything is written, naming a `TRUNCATE … RESTART IDENTITY` of exactly those tables, every name quoted and no `CASCADE`, which PostgreSQL refuses when a table outside the run references one of them; no upsert | owner, 2026-10-05 (fraiseql/semis#4) |
+| D35 | A pin keeps the projection it digested, `<scenario>.facts.json`, for every source, and a refusal names what moved by comparing it with the schema's; the DDL snapshot and `diff` on it are gone, and a 0.1.0 pin is refused with a hint to re-pin | owner, 2026-10-05 (fraiseql/semis#5) |
+| D37 | One apply of a scenario at a time: `semis apply` takes `pg_advisory_xact_lock(SEMIS_LOCK_CLASS, <scenario id>)` — the two-`int4` form, semis' class `0x5E3115` first, so its keys cannot meet another application's single-`bigint` ones — on a connection of its own, before the already-applied check, and holds it until the run's transaction ends: a second apply waits, then is refused once the first commits, or proceeds once it rolls back. `ScenarioManager` takes no lock on a caller's connection; a Python caller takes it with `readback.exclusive` | owner, 2026-10-06 |
+| D36 | Read-back takes parents from rows already in the database, listed under `existing:`: every row in `pk_*` order, or those `where: {identifier: [...]}` names, in that order; no table code needed, the pin covering their keys; prep-seed refuses it | owner, 2026-10-05 (fraiseql/semis#2) |
 
 ### On the UUID encoding's own arithmetic (D6)
 
 The decoder is the definition:
 
 ```python
-table_code  = int.from_bytes(b[0:4],  'big')    # 32 bits
-scenario_id = int.from_bytes(b[4:6],  'big')    # 16 bits
-version     = int.from_bytes(b[6:8],  'big')    # 16 bits
-sequence    = int.from_bytes(b[8:16], 'big')    # 64 bits
+n = int.from_bytes(b, 'big')
+table_code  = n >> 96                  # 32 bits
+scenario_id = n >> 80 & 0xffff         # 16 bits; n >> 76 & 0xf is 8, the UUID's version
+version     = n >> 64 & 0xfff          # 12 bits; n >> 62 & 0b11 is 0b10, its variant
+sequence    = n & (1 << 62) - 1        # 62 bits
 ```
+
+The UUID is an RFC 9562 version 8 UUID (D32), so validators that accept only standard
+UUIDs accept it, and `decode` refuses any other UUID.
 
 A UUID whose digits read `5001` carries the scenario id `0x5001`. Registered in decimal,
 `5001` encodes to `1389`, and the UUID no longer shows the number anyone typed. Codes and
@@ -640,7 +687,7 @@ ids are therefore written in hex — `scenario_id: 0x5001` — so the UUID reads
 written:
 
 ```
-01020304-5001-0001-0000-000000000042
+01020304-5001-8001-8000-000000000042
 ^^^^^^^^ ^^^^ ^^^^ ^^^^^^^^^^^^^^^^
 tb_lang  5001 v1   sequence 0x42 = 66
 ```

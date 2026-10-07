@@ -11,7 +11,9 @@ from confiture.platform import SeedError
 from fraiseql_semis import (
     FakeDataGenerator,
     ResolutionError,
+    ScenarioManager,
     SchemaFacts,
+    SchemaNotBuiltError,
     TableCodes,
     emit,
     readback,
@@ -145,3 +147,91 @@ def test_a_failure_rolls_back_every_table(
             for table in (CONTINENT, COUNTRY)
         ]
     assert counts == [(0,), (0,)]
+
+
+SEEDED = f"""
+INSERT INTO {CONTINENT} (id, identifier, name) VALUES
+    (gen_random_uuid(), 'eu', 'Europe'),
+    (gen_random_uuid(), 'as', 'Asia'),
+    (gen_random_uuid(), 'af', 'Africa');
+"""
+COUNTRIES = f"""\
+scenario_id: 0x5003
+name: countries
+mode: read-back
+seed: 42
+tables:
+  - name: {COUNTRY}
+    count: 10
+existing:
+  - name: {CONTINENT}
+"""
+
+
+def _countries(connection: psycopg.Connection, tmp_path: Path, text: str = COUNTRIES) -> list[str]:
+    """The run applied, then each country's continent by identifier, in the order drawn."""
+    connection.execute(SEEDED)
+    path = tmp_path / "countries.yaml"
+    path.write_text(text)
+    manager = ScenarioManager(FACTS)
+    manager.execute(manager.load(path), tmp_path / "out", connection=connection)
+    return [
+        identifier
+        for (identifier,) in connection.execute(
+            f"SELECT c.identifier FROM {COUNTRY} AS k JOIN {CONTINENT} AS c"
+            " ON c.pk_continent = k.fk_continent ORDER BY k.id"
+        )
+    ]
+
+
+def test_children_point_at_existing_rows_round_robin(
+    connection: psycopg.Connection, tmp_path: Path
+) -> None:
+    """In surrogate-key order: the rows the schema inserted, never generated again."""
+    assert _countries(connection, tmp_path) == ["eu", "as", "af"] * 3 + ["eu"]
+    (count,) = connection.execute(f"SELECT count(*) FROM {CONTINENT}").fetchone() or (0,)
+    assert count == 3
+
+
+def test_where_narrows_and_orders_the_existing_rows(
+    connection: psycopg.Connection, tmp_path: Path
+) -> None:
+    text = COUNTRIES + "    where: {identifier: [af, eu]}\n"
+    assert _countries(connection, tmp_path, text) == ["af", "eu"] * 5
+
+
+@pytest.mark.parametrize(
+    ("where", "match"),
+    [
+        ("", rf"scenario countries: existing {CONTINENT} holds no rows"),
+        (
+            "    where: {identifier: [eu, oc]}\n",
+            rf"scenario countries: existing {CONTINENT} has no row whose identifier is 'oc'",
+        ),
+    ],
+    ids=["no-rows", "unmatched"],
+)
+def test_existing_rows_that_are_not_there_are_refused(
+    connection: psycopg.Connection, tmp_path: Path, where: str, match: str
+) -> None:
+    path = tmp_path / "countries.yaml"
+    path.write_text(COUNTRIES + where)
+    if where:
+        connection.execute(SEEDED)
+    manager = ScenarioManager(FACTS)
+    with pytest.raises(ResolutionError, match=match):
+        manager.execute(manager.load(path), tmp_path / "out", connection=connection)
+
+
+@pytest.mark.parametrize("where", ["", "    where: {identifier: [eu]}\n"], ids=["all", "where"])
+def test_an_existing_table_the_database_does_not_hold_is_refused(
+    connection: psycopg.Connection, tmp_path: Path, where: str
+) -> None:
+    connection.execute(f"DROP TABLE {CONTINENT} CASCADE")
+    path = tmp_path / "countries.yaml"
+    path.write_text(COUNTRIES + where)
+    manager = ScenarioManager(FACTS)
+    with pytest.raises(
+        SchemaNotBuiltError, match=rf"^scenario countries: the database holds no {CONTINENT}\n"
+    ):
+        manager.execute(manager.load(path), tmp_path / "out", connection=connection)

@@ -11,7 +11,6 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import ParamSpec, TypeVar
 
 import typer
 
@@ -19,7 +18,9 @@ from fraiseql_semis.cli.options import (
     Config,
     Count,
     DatabaseUrl,
-    DryRun,
+    DryRunApply,
+    DryRunInMode,
+    DryRunWrite,
     Format,
     Locale,
     MaxLevel,
@@ -38,7 +39,7 @@ from fraiseql_semis.cli.options import (
 )
 from fraiseql_semis.errors import ProjectError, ScenarioError, SemisError
 from fraiseql_semis.project import Project
-from fraiseql_semis.readback import transaction
+from fraiseql_semis.readback import exclusive, transaction
 from fraiseql_semis.scenario import (
     Run,
     Scenario,
@@ -54,11 +55,9 @@ from fraiseql_semis.seeds import PrepSeedReport
 from fraiseql_semis.uuid_generator import SemanticUUIDGenerator
 
 app = typer.Typer(no_args_is_help=True)
-P = ParamSpec("P")
-R = TypeVar("R")
 
 
-def _refusals(command: Callable[P, R]) -> Callable[P, R]:
+def _refusals[**P, R](command: Callable[P, R]) -> Callable[P, R]:
     """The one error boundary: a refusal is printed to stderr and becomes the exit code.
 
     semis' own refusals exit with their ``exit_code`` (1); confiture's propagate unwrapped
@@ -77,13 +76,17 @@ def _refusals(command: Callable[P, R]) -> Callable[P, R]:
     return run
 
 
-# A URL's password, unless it is the placeholder a format hint spells out.
-_PASSWORD = re.compile(r"(\b[a-z][a-z0-9+.-]*://[^\s:/@]*:)(?!password@)[^\s@]+@")
+# A URL's password, up to the last @ of the URL, unless it is the placeholder a format
+# hint spells out.
+_USERINFO = re.compile(r"(\b[a-z][a-z0-9+.-]*://[^\s:/@]*:)(?!password@)\S*@")
+# A keyword DSN's password, quoted or bare, or a URL query string's.
+_KEYWORD = re.compile(r"(\bpassword\s*=\s*)(?:'(?:[^'\\]|\\.)*'|[^\s&]+)")
 
 
 def _masked(text: str) -> str:
-    """*text*, every URL's password in it replaced: a refusal may repeat the URL it was given."""
-    return _PASSWORD.sub(r"\1***@", text)
+    """*text*, every password in it replaced: a refusal may repeat the URL or the
+    keyword DSN it was given."""
+    return _KEYWORD.sub(r"\1***", _USERINFO.sub(r"\1***@", text))
 
 
 @app.callback()
@@ -96,14 +99,21 @@ def semis() -> None:
 def decode_uuid(value: SemanticUUID, config: Config = None) -> None:
     """Print the table code, scenario id, version and sequence a UUID carries.
 
-    With a project, the table and the scenario they name are printed beside them.
+    With a project, the table and the scenario they name are printed beside them; a
+    scenarios directory that does not read is said on stderr, and names no scenario.
     """
-    fields = SemanticUUIDGenerator.decode(value)
+    try:
+        fields = SemanticUUIDGenerator.decode(value)
+    except ValueError as refused:
+        raise typer.BadParameter(str(refused), param_hint="'VALUE'") from refused
     project = Project.find(config)
     table = scenario = ""
     if project is not None:
         table = project.table_codes.table_for(fields.table_code) or "no table has this code"
-        scenario = _scenario_names(catalogue(project.scenarios), fields.scenario_id)
+        try:
+            scenario = _scenario_names(catalogue(project.scenarios), fields.scenario_id)
+        except ScenarioError as refused:
+            typer.echo(f"the scenarios directory does not read: {refused.message}", err=True)
     _field("table_code", f"{fields.table_code:#010x}", table)
     _field("scenario_id", f"{fields.scenario_id:#06x}", scenario)
     _field("version", str(fields.version))
@@ -137,7 +147,7 @@ def seeds(  # noqa: PLR0913 — one argument; the rest are the run's options
     config: Config = None,
     database_url: DatabaseUrl = None,
     format: Format = None,
-    dry_run: DryRun = False,
+    dry_run: DryRunWrite = False,
     no_pin: NoPin = False,
     verbose: Verbose = False,
     scenario_id: ScenarioId = None,
@@ -165,7 +175,7 @@ def generate(  # noqa: PLR0913 — one argument; the rest are the run's options
     config: Config = None,
     database_url: DatabaseUrl = None,
     format: Format = None,
-    dry_run: DryRun = False,
+    dry_run: DryRunInMode = False,
     no_pin: NoPin = False,
     verbose: Verbose = False,
     scenario_id: ScenarioId = None,
@@ -187,7 +197,7 @@ def apply(  # noqa: PLR0913 — one argument; the rest are the run's options
     config: Config = None,
     database_url: DatabaseUrl = None,
     format: Format = None,
-    dry_run: DryRun = False,
+    dry_run: DryRunApply = False,
     no_pin: NoPin = False,
     verbose: Verbose = False,
     scenario_id: ScenarioId = None,
@@ -212,7 +222,7 @@ def table(  # noqa: PLR0913 — one argument; the rest are the run's options
     config: Config = None,
     database_url: DatabaseUrl = None,
     format: Format = None,
-    dry_run: DryRun = False,
+    dry_run: DryRunInMode = False,
     verbose: Verbose = False,
     seed: Seed = None,
 ) -> None:
@@ -248,9 +258,10 @@ def validate(
     options = _Options(None, database_url, None, False, no_pin, False)
     _, manager, loaded = _load(scenario, config, options)
     _notices(manager.check(loaded, no_pin=no_pin))
-    rows = sum(spec.count for spec in loaded.tables)
+    tables, rows = len(loaded.tables), sum(spec.count for spec in loaded.tables)
     typer.echo(
-        f"scenario {loaded.name} is valid: {len(loaded.tables)} tables, {rows} rows, {loaded.mode}"
+        f"scenario {loaded.name} is valid: {tables} table{_plural(tables)}, "
+        f"{rows} row{_plural(rows)}, {loaded.mode}"
     )
 
 
@@ -368,11 +379,17 @@ def _write(manager: ScenarioManager, scenario: Scenario, options: _Options) -> N
 def _apply(
     project: Project, manager: ScenarioManager, scenario: Scenario, options: _Options
 ) -> None:
-    """*scenario* applied in one transaction: committed, or under ``--dry-run`` rolled back."""
+    """*scenario* applied in one transaction: committed, or under ``--dry-run`` rolled back.
+
+    The scenario's lock is held around that transaction, so a second apply of it waits.
+    """
     url = project.database_url(options.database_url, mutating=True)
     format, no_pin = options.format, options.no_pin
     out_dir = None if options.dry_run else options.out_dir()
-    with transaction(url, commit=not options.dry_run) as connection:
+    with (
+        exclusive(url, scenario.id),
+        transaction(url, commit=not options.dry_run) as connection,
+    ):
         if out_dir is None:
             run = manager.rehearse(scenario, connection=connection, format=format, no_pin=no_pin)
         else:
@@ -393,7 +410,7 @@ def _report(run: Run, verb: str, verbose: bool) -> None:
     _notices(run.notices)
     width = max((len(seed.path.name) for seed in run.seeds), default=0)
     for seed in run.seeds:
-        line = f"{verb} {seed.path.name:<{width}}  {seed.rows} rows"
+        line = f"{verb} {seed.path.name:<{width}}  {seed.rows} row{_plural(seed.rows)}"
         if verbose:
             line += f"  {seed.format}: {', '.join(seed.columns)}"
         typer.echo(line)

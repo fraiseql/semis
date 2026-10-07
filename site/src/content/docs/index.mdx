@@ -1,0 +1,84 @@
+---
+title: fraiseql-semis
+description: Reproducible seed and test data for PostgreSQL schemas that follow the trinity pattern
+---
+
+semis generates rows for PostgreSQL schemas that follow the
+[trinity pattern](/concepts/trinity-pattern/): which rows exist, what each value looks
+like, and what UUID identifies each one. It decides nothing about the schema those rows
+land in. Every question of the form *what does the schema say?* goes to
+[confiture](https://fraiseql.dev/confiture/), which reads the DDL or the live database,
+orders tables by their real foreign keys, says which columns a writer may supply and what
+each value must respect, and writes, applies and validates the seed files.
+
+## Install
+
+```bash
+uv add fraiseql-semis          # brings fraiseql-confiture>=1.30,<2
+```
+
+The package installs the `semis` command. [Getting started](/getting-started/) goes from
+an empty directory to seeds applied to a database.
+
+## What semis does
+
+- **Semantic UUIDs.** Every `id` encodes its table, scenario, version and sequence, so a
+  row found in a dump says where it came from. The `identifier` slug carries the scenario
+  too, so two scenarios can share a database. See [the semantic UUID](/concepts/semantic-uuid/).
+- **Values from the schema's facts.** A value satisfies the column that receives it: its
+  type, its enum labels, its declared length, its NOT NULL and its UNIQUE.
+- **Real foreign keys.** A foreign key's parent table and column come from its
+  `REFERENCES`, never from the spelling of `fk_continent`.
+- **Two declared FK modes.** A scenario says how a child learns its parent's key:
+  prep-seed or read-back. semis never guesses. See [the two FK modes](/concepts/fk-modes/).
+- **Complete rows or none.** A row missing a NOT NULL column without a default is refused
+  before it is written. See [the row contract](/concepts/row-contract/).
+- **YAML scenarios, pinned to their schema.** A run is a reviewable file, and a replay
+  against a schema that has moved is refused. See [schema pins](/concepts/schema-pins/).
+- **Reproducible.** The same scenario, seed and schema produce the same prep-seed bytes on
+  any machine. See [determinism](/concepts/determinism/).
+- **No invented keys.** PostgreSQL fills `pk_*`; semis never writes one.
+
+## What semis does not do
+
+semis reads no `information_schema`, sorts no tables, and writes no SQL by hand. All three
+are confiture's, and going through it is why `VARCHAR(50)` gets fifty characters and why a
+`REFERENCES` clause is read rather than guessed.
+
+semis also does not:
+
+- generate DDL, migrations or `ALTER` statements;
+- evaluate CHECK expressions: a CHECK is reported to the provider that draws the value,
+  and PostgreSQL judges it at apply time;
+- own a project's prep-seed resolvers: they are the project's, and confiture checks them;
+- hold a map of every row's UUID to its integer key: the integers are PostgreSQL's.
+
+## Who it is for
+
+| Reader | Wants |
+|---|---|
+| A developer | Realistic data for a feature in one command, the same every time, and to know which fixture a row in the database came from |
+| A QA engineer | Large datasets and specific edge cases, generated deterministically, and a known-good state to return to |
+| A schema owner | Fixtures that are refused, not silently wrong, when the schema changes under them |
+
+## Where semis ends and confiture begins
+
+| Question | Answered by |
+|---|---|
+| What tables, columns, constraints and enums exist | confiture |
+| In what order rows may be inserted | confiture |
+| Which columns a writer may supply, and what each value must respect | confiture |
+| How a seed file is written, applied and validated | confiture |
+| What a value looks like | semis: Faker, locales, provider libraries |
+| Which rows exist, how many, in what scenario | semis: scenarios |
+| What identifies a row | semis: the semantic UUID |
+| Whether a row is complete enough to write | semis: the row contract |
+| That the schema has not moved under a scenario | semis: the schema pin |
+
+## Next steps
+
+- [Getting started](/getting-started/): a schema, a project file, a scenario, and seeds in a database
+- [The trinity pattern](/concepts/trinity-pattern/): the three keys semis writes around
+- [Writing scenarios](/guides/scenarios/): overrides, providers and hierarchies
+- [The semis command](/reference/cli/): every command and option
+- [Changelog](/changelog/): what each release changed

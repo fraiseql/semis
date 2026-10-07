@@ -132,7 +132,7 @@ class _Drawing:
     ],
 )
 def test_a_time_zone_is_written_by_its_canonical_name(drawn: str, written: str) -> None:
-    faker: Faker = _Drawing(drawn)  # type: ignore[assignment]
+    faker: Faker = _Drawing(drawn)  # ty: ignore[invalid-assignment]
     assert i18n.timezone(faker, _crm(CONTACT)["timezone"]) == written
 
 
@@ -191,7 +191,9 @@ def test_organization_draws_registry_numbers_that_check() -> None:
 
 
 def test_a_generated_row_carries_the_librarys_values() -> None:
-    facts = SchemaFacts.from_source(CRM, table_codes=CRM_CODES)
+    # A rule draws a column the row must carry; a nullable one is left NULL unless named.
+    ddl = CRM.replace("locale VARCHAR(10)", "locale VARCHAR(10) NOT NULL")
+    facts = SchemaFacts.from_source(ddl, table_codes=CRM_CODES)
     registry = CustomProviderRegistry()
     registry.register_library(i18n.LIBRARY)
     rows = FakeDataGenerator(facts, 0x5001, seed=7, providers=registry).generate_rows(

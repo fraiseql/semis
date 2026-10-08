@@ -1,6 +1,6 @@
 # PRD: fraiseql-semis
 
-**Status**: 0.2.0
+**Status**: 0.3.0
 **Reads with**: [ARCHITECTURE.md](./ARCHITECTURE.md) (how it is built, and why),
 [../README.md](../README.md) (how it is used)
 
@@ -142,11 +142,11 @@ UUIDFields(table_code=33752069, scenario_id=20481, version=1, sequence=66)
 
 ## Success metrics
 
-| Metric | Target | Measured for 0.2.0 |
+| Metric | Target | Measured for 0.3.0 |
 |---|---|---|
 | Generation rate | 10,000 rows/s | 55,000 rows/s |
-| 100,000 rows written and applied | under 2 minutes | 11 s |
-| Referential integrity of generated data | 100% | every FK points at a row of the run, a row an `existing:` table holds, or is a declared `NULL` |
+| 100,000 rows written and applied | under 2 minutes | 10 s |
+| Referential integrity of generated data | 100% | every FK points at a row of the run, a row an `existing:` table holds, or is a `NULL` the scenario declares or the run names |
 
 ---
 
@@ -154,7 +154,7 @@ UUIDFields(table_code=33752069, scenario_id=20481, version=1, sequence=66)
 
 - Reading `information_schema`, ordering tables, writing seed SQL: confiture's. semis'
   only SQL is the handful of parameterised statements in one module, for read-back, the
-  re-apply check and its lock.
+  re-apply check, the reset and their lock.
 - Generating DDL or migrations.
 - Evaluating CHECK expressions: PostgreSQL judges them at apply time.
 - Owning a project's prep-seed resolvers: they are the project's, and confiture checks

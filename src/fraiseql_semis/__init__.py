@@ -20,6 +20,8 @@ from fraiseql_semis.errors import (
     IncomparablePinError,
     PinError,
     ProjectError,
+    ResetBlockedError,
+    ResetScopeError,
     ResolutionError,
     RowContractError,
     ScenarioError,
@@ -35,14 +37,16 @@ from fraiseql_semis.faker_provider import (
     Provider,
     Rule,
 )
-from fraiseql_semis.generator import FakeDataGenerator
+from fraiseql_semis.generator import Copied, FakeDataGenerator
 from fraiseql_semis.hierarchy import Hierarchy, Paths
 from fraiseql_semis.pin import SchemaPin
 from fraiseql_semis.project import Project, ProjectSchema
 from fraiseql_semis.resolution import PrepSeedResolver, ReadBackResolver, Resolver
 from fraiseql_semis.rows import Violation, check_row, require_row
 from fraiseql_semis.scenario import (
+    Deleted,
     ExistingTable,
+    PinChange,
     Run,
     Scenario,
     ScenarioEntry,
@@ -64,7 +68,9 @@ __all__ = [
     "AlreadyAppliedError",
     "CodeRegistryError",
     "ColumnFacts",
+    "Copied",
     "CustomProviderRegistry",
+    "Deleted",
     "ExistingTable",
     "FakeDataGenerator",
     "FakerProvider",
@@ -72,6 +78,7 @@ __all__ = [
     "IncomparablePinError",
     "Library",
     "Paths",
+    "PinChange",
     "PinError",
     "PrepSeedResolver",
     "Project",
@@ -79,6 +86,8 @@ __all__ = [
     "ProjectSchema",
     "Provider",
     "ReadBackResolver",
+    "ResetBlockedError",
+    "ResetScopeError",
     "ResolutionError",
     "Resolver",
     "RowContractError",

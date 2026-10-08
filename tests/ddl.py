@@ -113,3 +113,72 @@ CREATE TABLE prep_seed.tb_location (
 """
 
 HIERARCHY_CODES = {"catalog.tb_location": 0x05060708}
+
+# A child copying its parent's id, as a tenant column does, with a column for every case
+# copies: refuses: a nullable key, a self-FK, a parent the run may not write, and parent
+# columns left NULL, defaulted, trusted to a trigger or set as a hierarchy's path.
+COPIES = """
+CREATE SCHEMA tenant;
+
+CREATE TABLE tenant.tb_category (
+    pk_category BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE tenant.tb_organization (
+    pk_organization BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL UNIQUE,
+    name VARCHAR(50) NOT NULL,
+    note TEXT,
+    status TEXT DEFAULT 'live',
+    created_by UUID,
+    fk_parent_organization BIGINT REFERENCES tenant.tb_organization (pk_organization),
+    path LTREE
+);
+
+CREATE TABLE tenant.tb_contact (
+    pk_contact BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL UNIQUE,
+    tenant_id UUID NOT NULL,
+    backup_tenant_id UUID,
+    label TEXT,
+    fk_customer_org BIGINT NOT NULL REFERENCES tenant.tb_organization (pk_organization),
+    fk_backup_org BIGINT REFERENCES tenant.tb_organization (pk_organization),
+    fk_referrer BIGINT REFERENCES tenant.tb_contact (pk_contact),
+    fk_category BIGINT REFERENCES tenant.tb_category (pk_category)
+);
+
+CREATE SCHEMA prep_seed;
+
+CREATE TABLE prep_seed.tb_organization (
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL,
+    name VARCHAR(50),
+    note TEXT,
+    status TEXT,
+    created_by UUID,
+    fk_parent_organization_id UUID,
+    path LTREE
+);
+
+CREATE TABLE prep_seed.tb_contact (
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL,
+    tenant_id UUID,
+    backup_tenant_id UUID,
+    label TEXT,
+    fk_customer_org_id UUID,
+    fk_backup_org_id UUID,
+    fk_referrer_id UUID,
+    fk_category_id UUID
+);
+"""
+
+COPIES_CODES = {
+    "tenant.tb_category": 0x06070809,
+    "tenant.tb_organization": 0x0708090A,
+    "tenant.tb_contact": 0x08090A0B,
+}

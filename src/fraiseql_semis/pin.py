@@ -10,7 +10,7 @@ in, a digest out.
 import hashlib
 import json
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import date
 from typing import cast, get_args
 
@@ -27,8 +27,6 @@ class SchemaPin:
     digest: str
     confiture: str
     taken: date
-    facts: str | None = None
-    """The file beside the scenario keeping the projection the digest was taken from."""
     recorded: Projection | None = field(default=None, compare=False, repr=False)
     """That projection, once read: what a refusal compares the schema's with."""
 
@@ -54,72 +52,61 @@ class SchemaPin:
             recorded=projected,
         )
 
-    def with_facts(self, facts: str, recorded: Projection | None = None) -> SchemaPin:
-        """This pin, naming *facts* as the file keeping its projection, and holding the
-        *recorded* projection read from it, when it was."""
-        return replace(self, facts=facts, recorded=self.recorded if recorded is None else recorded)
-
-    def to_mapping(self) -> dict[str, object]:
-        """The ``schema_pin:`` block a scenario records (ARCHITECTURE §8)."""
-        block: dict[str, object] = {
-            "source": self.source,
-            "digest": self.digest,
+    def to_document(self) -> dict[str, object]:
+        """The pin as a scenario's pin file keeps it: how the schema was read, the digest,
+        and the projection it was taken from (ARCHITECTURE §8)."""
+        return {
             "confiture": self.confiture,
-            "taken": self.taken,
+            "digest": self.digest,
+            "facts": self.recorded,
+            "source": self.source,
+            "taken": self.taken.isoformat(),
         }
-        if self.facts is not None:
-            block["facts"] = self.facts
-        return block
 
     @classmethod
-    def from_mapping(cls, block: Mapping[str, object], *, scenario: str) -> SchemaPin:
-        """The pin a scenario's ``schema_pin:`` block records."""
-        if "facts" not in block and set(_BLOCK_FIELDS) <= set(block) <= _0_1_0_KEYS:
-            raise ScenarioError(
-                f"scenario {scenario}: schema_pin was written by semis 0.1.0, and keeps no facts",
-                resolution_hint=(
-                    "Re-pin the scenario: delete its schema_pin: block, run it with -o <dir>, "
-                    "then put the schema_pin.yaml written beside its seeds in the block's place "
-                    f"and the {facts_file(scenario)} beside the scenario file."
-                ),
-            )
-        unknown = sorted(set(block) - set(_BLOCK_KEYS))
-        missing = sorted({*_BLOCK_FIELDS, "facts"} - set(block))
-        if unknown or missing:
-            raise ScenarioError(
-                f"scenario {scenario}: schema_pin has {_listed(unknown, 'unknown key')}"
-                f"{' and ' if unknown and missing else ''}{_listed(missing, 'no')}",
-                resolution_hint="Copy the block a run wrote to schema_pin.yaml, unchanged.",
-            )
-        source, digested, confiture, taken, facts = (block[key] for key in _BLOCK_KEYS)
+    def from_document(cls, document: object, *, scenario: str) -> SchemaPin:
+        """The pin a scenario's pin file keeps, refused unless it holds exactly the keys
+        ``to_document`` writes, and facts its digest was taken from."""
+        fields = document if isinstance(document, dict) else {}
+        source, digested, confiture, taken, facts = (
+            fields.get(key) for key in ("source", "digest", "confiture", "taken", "facts")
+        )
         if (
-            source not in get_args(SourceKind)
+            set(fields) != _DOCUMENT_KEYS
+            or source not in get_args(SourceKind)
             or not isinstance(digested, str)
             or not isinstance(confiture, str)
-            or not isinstance(taken, date)
-            or not isinstance(facts, str)
+            or not isinstance(facts, list)
+            or not isinstance(taken, str)
+            or _date(taken) is None
         ):
             raise ScenarioError(
-                f"scenario {scenario}: schema_pin is malformed",
-                resolution_hint="Copy the block a run wrote to schema_pin.yaml, unchanged.",
+                f"scenario {scenario}: its pin file is malformed", resolution_hint=_REPIN_HINT
             )
-        return cls(cast("SourceKind", source), digested, confiture, taken, facts)
+        if digest(cast("Projection", facts)) != digested:
+            raise ScenarioError(
+                f"scenario {scenario}: its pin file does not hold the facts its digest was "
+                "taken from",
+                resolution_hint=_REPIN_HINT,
+            )
+        return cls(
+            cast("SourceKind", source),
+            digested,
+            confiture,
+            cast("date", _date(taken)),
+            recorded=cast("Projection", facts),
+        )
 
 
-def facts_file(scenario: str) -> str:
-    """The file a run of *scenario* keeps its pin's facts in, beside ``schema_pin.yaml``:
-    named after the scenario, so the scenarios of one directory each keep their own. A
-    scenario's name is a file name, so it is used as written."""
-    return f"{scenario}.facts.json"
+_DOCUMENT_KEYS = {"confiture", "digest", "facts", "source", "taken"}
+_REPIN_HINT = "Re-take it with semis pin on the scenario: it writes the file whole."
 
 
-_BLOCK_FIELDS = ("source", "digest", "confiture", "taken")
-_BLOCK_KEYS = (*_BLOCK_FIELDS, "facts")
-_0_1_0_KEYS = {*_BLOCK_FIELDS, "snapshot"}
-
-
-def _listed(keys: list[str], label: str) -> str:
-    return f"{label} {', '.join(keys)}" if keys else ""
+def _date(text: str) -> date | None:
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 Projection = list[dict[str, object]]
@@ -262,13 +249,11 @@ def verify(  # noqa: PLR0913 — three positionals; the scenario's and the run's
     twins: Iterable[str] = (),
     existing: Iterable[str] = (),
     no_pin: bool = False,
-    pin_kept: bool = True,
 ) -> str:
     """Refuse a replay of *scenario* when *facts* no longer match its *recorded* pin.
 
     A refusal names what moved, comparing the projection the pin kept with the
-    schema's. *no_pin* skips the check for this one run. *pin_kept* says whether this
-    run keeps the pin it wrote, for the hint to name one. Returns one line saying what
+    schema's. *no_pin* skips the check for this one run. Returns one line saying what
     the check did, so a skipped or absent check is never silent.
     """
     if no_pin:
@@ -283,40 +268,20 @@ def verify(  # noqa: PLR0913 — three positionals; the scenario's and the run's
             recorded=recorded.digest,
             current=current.digest,
             resolution_hint=(
-                f"Read the schema from {recorded.source} as the pin was, or {_repin(pin_kept)}."
+                f"Read the schema from {recorded.source} as the pin was, or {_REPIN}."
             ),
         )
     if recorded.digest != current.digest:
-        changes = (
-            None
-            if recorded.recorded is None or current.recorded is None
-            else describe_changes(recorded.recorded, current.recorded)
-        )
+        changes = describe_changes(recorded.recorded or [], current.recorded or [])
         raise PinError(
             f"scenario {scenario} was pinned to {recorded.digest}, and the schema now reads "
-            f"{current.digest}\n{_describe(changes)}",
+            f"{current.digest}\nWhat moved:\n" + "\n".join(f"  {change}" for change in changes),
             recorded=recorded.digest,
             current=current.digest,
-            changes=changes or (),
-            resolution_hint=(
-                f"Review the changes, then {_repin(pin_kept)}, or pass --no-pin for one run."
-            ),
+            changes=changes,
+            resolution_hint=f"Review the changes, then {_REPIN}, or pass --no-pin for one run.",
         )
     return f"scenario {scenario} matches its schema pin ({current.source} {current.digest})"
 
 
-def _repin(pin_kept: bool) -> str:
-    if pin_kept:
-        return "re-pin the scenario from the schema_pin.yaml this run wrote beside its seeds"
-    return (
-        "re-pin the scenario from the schema_pin.yaml `semis seeds -o <dir>` or `semis apply` "
-        "writes beside its seeds"
-    )
-
-
-def _describe(changes: tuple[str, ...] | None) -> str:
-    if changes is None:
-        return "The pin keeps no facts, so what moved cannot be named."
-    if not changes:
-        return "The pin's facts match this schema; its digest was not taken from them."
-    return "What moved:\n" + "\n".join(f"  {change}" for change in changes)
+_REPIN = "accept them with semis pin on the scenario"

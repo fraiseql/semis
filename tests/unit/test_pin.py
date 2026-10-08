@@ -85,12 +85,6 @@ def test_the_refusal_names_what_moved() -> None:
     assert f"What moved:\n  {change}" in str(refused.value)
 
 
-def test_a_pin_without_its_facts_is_refused_with_its_digests_alone() -> None:
-    bare = SchemaPin("ddl", _pin(TRINITY).digest, "1.18.0", date(2026, 9, 23))
-    with pytest.raises(PinError, match="keeps no facts, so what moved cannot be named"):
-        verify(bare, _facts(MOVED), TABLES, scenario="minimal_seed")
-
-
 def test_a_pin_of_another_source_kind_is_refused_as_incomparable() -> None:
     live = SchemaPin("live", _pin(TRINITY).digest, "1.18.0", date(2026, 9, 23))
     with pytest.raises(IncomparablePinError, match="pinned against a live schema") as refused:
@@ -107,14 +101,6 @@ def test_a_matching_pin_lets_the_run_proceed_and_says_so() -> None:
 def test_an_unpinned_scenario_proceeds_and_says_so() -> None:
     notice = verify(None, _facts(MOVED), TABLES, scenario="minimal_seed")
     assert notice == "scenario minimal_seed is unpinned: its schema is not checked"
-
-
-def test_a_digest_its_facts_do_not_explain_is_still_refused() -> None:
-    stale = SchemaPin(
-        "ddl", "sha256:0", "1.18.0", date(2026, 9, 23), recorded=_pin(TRINITY).recorded
-    )
-    with pytest.raises(PinError, match="facts match this schema; its digest was not taken"):
-        verify(stale, _facts(TRINITY), TABLES, scenario="minimal_seed")
 
 
 def test_no_pin_skips_the_check_and_says_so() -> None:
@@ -258,13 +244,3 @@ def test_an_existing_tables_keys_are_pinned_and_a_moved_key_is_named() -> None:
 def _column_of(ddl: str, name: str) -> dict[str, object]:
     (entry,) = projection(_facts(ddl), TABLES[:1])
     return next(c for c in cast("list[dict[str, object]]", entry["columns"]) if c["name"] == name)
-
-
-def test_a_pin_with_no_facts_file_writes_a_block_without_one() -> None:
-    pin = SchemaPin("ddl", "sha256:0", "1.30.0", date(2026, 10, 6))
-    assert pin.to_mapping() == {
-        "source": "ddl",
-        "digest": "sha256:0",
-        "confiture": "1.30.0",
-        "taken": date(2026, 10, 6),
-    }

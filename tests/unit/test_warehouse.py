@@ -87,7 +87,7 @@ def test_the_columns_draw_from_the_enabled_libraries(rows: Rows) -> None:
 
 def test_levels_1_to_3_find_nothing_in_the_seeds(run: Run) -> None:
     """What they report is the fixture's schema: it holds no resolver."""
-    report = seeds.validate(run.pin_path.parent, schema_dir=WAREHOUSE / "schema", max_level=3)
+    report = seeds.validate(run.seeds[0].path.parent, schema_dir=WAREHOUSE / "schema", max_level=3)
     written = {seed.path.name for seed in run.seeds}
     assert {Path(path).name for path in report.scanned_files} == written
     assert [v for v in report.violations if Path(v.file_path).name in written] == []

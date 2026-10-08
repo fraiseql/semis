@@ -6,6 +6,91 @@ All notable changes to fraiseql-semis are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-08
+
+semis carries what a scenario did by hand on 0.2.0: a nullable key with no parent, a
+column copied from its parent row, a reset that keeps other rows, and a re-pin in one
+command. Two formats change: the pin leaves the scenario file, and a run writes no pin.
+
+### Upgrading from 0.2.0
+
+- **Move each pin with `semis pin`**: delete the scenario's `schema_pin:` block and the
+  `<name>.facts.json` beside it, run `semis pin <scenario>`, and commit the
+  `<name>.pin.json` it writes. Until then the scenario is refused, naming both.
+- **Reset with semis**: replace a `TRUNCATE … RESTART IDENTITY` a refusal printed, or a
+  dropped and rebuilt database, with `semis apply --reset`, or `semis reset` then
+  `semis apply`. Either deletes the scenario's rows and keeps every other.
+- **Drop the copies a run no longer needs**: `-o` on `semis apply`, a step copying
+  `schema_pin.yaml` out of an output directory, a nullable key overridden `null` only
+  because its parent is not in the run, and a list of UUIDs a `copies:` can derive.
+- **From Python**: `Scenario.schema_pin` is `Scenario.pin`, `Run.pin_path` is gone, and
+  a `Resolver` of a project's own adds `pointed_at`.
+
+### Added
+
+- **A column copies its parent row's value** with a table's `copies:`, as
+  `tenant_id: fk_customer_org.id`: each row holds the value of `id` in the row its
+  `fk_customer_org` points at, in both modes, so no UUID is computed by hand and no list
+  is kept in step with another table's. A copy the run cannot make is refused before a
+  row is drawn, naming the table, the column and why: a key it does not draw or that
+  points at the table itself, an `existing:` table or one the run does not write; a
+  parent column whose value semis does not know; two types; a NOT NULL column copying a
+  key left `NULL`. `TableSpec.copies` maps a column to a `Copied(key, column)`.
+- **`semis reset SCENARIO` deletes the rows the scenario wrote, and only those**: in
+  each table its run writes into, and in prep-seed each staging twin, the rows whose
+  `id` lies in the scenario's UUID range, children first, in one transaction behind the
+  scenario's lock; `--dry-run` rolls back. Rows another tool or scenario wrote stay, and
+  `existing:` tables are never touched. One line per table says what went and what was
+  kept. A row the scenario did not write that points at one it did, from any schema and
+  whatever its key's `ON DELETE`, blocks the reset with `ResetBlockedError`
+  (`SEMIS_RESET_001`), naming its table and key: nothing is deleted, so no cascade
+  reaches a row semis did not write. A table the reset leaves empty has its identity
+  restarted, so a table the scenario owns alone applies again byte-identical; one that
+  keeps other rows keeps its sequence, and says so. A table with no uuid `id` cannot be scoped, and is refused with
+  `ResetScopeError` (`SEMIS_RESET_002`). From Python, `ScenarioManager.reset` returns a
+  `Deleted(table, rows, kept, restarted)` per table.
+- **`semis pin SCENARIO` writes the scenario's pin to `<name>.pin.json` beside it**: the
+  digest, how the schema was read and the facts it was taken from, in one file to review
+  as a diff. An unchanged pin writes nothing; a moved one prints what moved, then is
+  rewritten; one that does not read is replaced. `--check` writes nothing and exits 1
+  when the pin would change, for CI. From Python, `ScenarioManager.pin(scenario, path)`
+  returns a `PinChange`.
+- **`semis apply --reset`** deletes the scenario's rows as `semis reset` does, then
+  applies it, in one transaction behind one lock: a failed apply leaves the first run's
+  rows in place, and on a database holding none of them it is `apply`.
+
+### Changed
+
+- **Breaking: a scenario's pin is the file `<name>.pin.json` beside it**, read when the
+  scenario loads and written only by `semis pin`; the scenario file holds no pin. A
+  `schema_pin:` block, or the `<name>.facts.json` 0.2.0 kept beside the scenario, is
+  refused with the hint to run `semis pin`. To upgrade, delete each scenario's
+  `schema_pin:` block and its facts file, run `semis pin` on it, and commit the
+  `<name>.pin.json` it writes. A moved schema's refusal names `semis pin` to accept the
+  change. `Scenario`'s `schema_pin` is now `pin`, and `ScenarioManager.load` takes
+  `read_pin=False` to load a scenario unpinned.
+- **`semis apply` needs no `-o`**: without it, the seeds are applied and no file is kept,
+  each line naming the table it applied; with it, they are kept there as before.
+  `ScenarioManager.apply` takes `out_dir=None` alike. `semis seeds` still needs `-o`:
+  its files are its product.
+- **Breaking: a run writes its seeds and nothing else**: `semis seeds`, `generate` and
+  `apply` no longer write `schema_pin.yaml` and `<name>.facts.json` beside them, and
+  `Run.pin_path` is gone; `Run.pin` is still the pin of the schema the run read.
+  `Validation.seeds_dir` names the rehearsal's directory a finding is relative to.
+- **A nullable foreign key whose parent the run lacks is written `NULL`**, not refused:
+  its parent table is not in the run, or is in it with `count: 0`, and is not under
+  `existing:`. A NOT NULL key so placed is still refused, as is an `existing:` table
+  with no rows. Overriding such a key `null` is no longer needed. The run names the key
+  in its line of columns left `NULL`, in column order, and the hint says what gives each
+  kind a value: `shop.tb_customer leaves fk_segment, deleted_at NULL; fill: draws the
+  values, a parent under tables: or existing: points the keys`. A line naming only
+  value columns reads as in 0.2.0.
+- **A refused re-apply names `semis apply --reset` and `semis reset`**, where its hint
+  printed a `TRUNCATE … RESTART IDENTITY` of the run's tables: that statement emptied
+  them whole, rows the scenario never wrote included.
+- **`Resolver` has a `pointed_at(column, *, table)`**: the parent row its last
+  `value_for` pointed a key at, which a copy reads. A resolver of a project's own adds it.
+
 ## [0.2.0] - 2026-10-06
 
 Resolves fraiseql/semis#1 to #5. A breaking release: every UUID semis writes changes, so

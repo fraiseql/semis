@@ -39,8 +39,11 @@ CREATE TABLE {COUNTRY} (
     iso_code CHAR(2) NOT NULL
 );
 """
-FACTS = SchemaFacts.from_source(
-    DDL, table_codes=TableCodes({CONTINENT: 0x02030405, COUNTRY: 0x03040506})
+CODES = TableCodes({CONTINENT: 0x02030405, COUNTRY: 0x03040506})
+FACTS = SchemaFacts.from_source(DDL, table_codes=CODES)
+# The same tables with a nullable fk_continent, as a test's ALTER makes them.
+OPTIONAL = SchemaFacts.from_source(
+    DDL.replace("fk_continent BIGINT NOT NULL", "fk_continent BIGINT"), table_codes=CODES
 )
 
 
@@ -132,6 +135,16 @@ def test_no_parent_rows_raises_resolution_error(
         _read_back(connection, tmp_path, {CONTINENT: 0, COUNTRY: 2})
 
 
+def test_a_nullable_key_without_a_parent_is_applied_null(
+    connection: psycopg.Connection, tmp_path: Path
+) -> None:
+    connection.execute(f"ALTER TABLE {COUNTRY} ALTER fk_continent DROP NOT NULL")
+    generator = FakeDataGenerator(OPTIONAL, scenario_id=0x5001, seed=42)
+    emit.read_back(connection, generator, {COUNTRY: 3}, tmp_path)
+    keys = [fk for (fk,) in connection.execute(f"SELECT fk_continent FROM {COUNTRY}")]
+    assert keys == [None, None, None]
+
+
 def test_a_failure_rolls_back_every_table(
     connection: psycopg.Connection, schema: str, tmp_path: Path
 ) -> None:
@@ -220,6 +233,20 @@ def test_existing_rows_that_are_not_there_are_refused(
         connection.execute(SEEDED)
     manager = ScenarioManager(FACTS)
     with pytest.raises(ResolutionError, match=match):
+        manager.execute(manager.load(path), tmp_path / "out", connection=connection)
+
+
+def test_an_empty_existing_table_is_refused_for_a_nullable_key_too(
+    connection: psycopg.Connection, tmp_path: Path
+) -> None:
+    """Listing a table under existing: asks for its rows; it is not a parent left out."""
+    connection.execute(f"ALTER TABLE {COUNTRY} ALTER fk_continent DROP NOT NULL")
+    path = tmp_path / "countries.yaml"
+    path.write_text(COUNTRIES)
+    manager = ScenarioManager(OPTIONAL)
+    with pytest.raises(
+        ResolutionError, match=rf"^scenario countries: existing {CONTINENT} holds no rows"
+    ):
         manager.execute(manager.load(path), tmp_path / "out", connection=connection)
 
 

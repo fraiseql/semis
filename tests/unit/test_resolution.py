@@ -7,7 +7,7 @@ import pytest
 from fraiseql_semis.codes import TableCodes
 from fraiseql_semis.errors import ResolutionError
 from fraiseql_semis.generator import FakeDataGenerator, Row
-from fraiseql_semis.resolution import PrepSeedResolver, ReadBackResolver
+from fraiseql_semis.resolution import PrepSeedResolver, ReadBackResolver, require_parents
 from fraiseql_semis.schema import (
     ColumnFacts,
     DependencyCycleError,
@@ -118,6 +118,21 @@ def test_a_parent_outside_the_run_is_refused_naming_column_and_parent() -> None:
         match=r"catalog\.tb_country\.fk_continent references catalog\.tb_continent",
     ):
         _prep_seed_run(FACTS, {"catalog.tb_country": 1})
+
+
+OPTIONAL = SchemaFacts.from_source(
+    TRINITY.replace("fk_continent BIGINT NOT NULL REFERENCES", "fk_continent BIGINT REFERENCES"),
+    table_codes=TableCodes(CODES),
+)
+
+
+def test_a_nullable_key_whose_parent_has_no_rows_needs_none() -> None:
+    require_parents(OPTIONAL.facts_for("catalog.tb_country"), {"catalog.tb_country": 2})
+
+
+def test_a_nullable_key_whose_parent_is_outside_the_run_is_drawn_null() -> None:
+    run = _prep_seed_run(OPTIONAL, {"catalog.tb_country": 2})
+    assert [row["fk_continent"] for row in run["catalog.tb_country"]] == [None, None]
 
 
 def test_a_foreign_key_without_a_resolver_is_refused() -> None:

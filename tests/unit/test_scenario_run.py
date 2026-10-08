@@ -1,11 +1,8 @@
 """ScenarioManager.execute: a scenario run in its mode, its schema pinned beside its seeds."""
 
-import json
-import shutil
 from pathlib import Path
 
 import pytest
-import yaml
 
 from fraiseql_semis.codes import TableCodes
 from fraiseql_semis.errors import (
@@ -15,12 +12,11 @@ from fraiseql_semis.errors import (
     RowContractError,
     ScenarioError,
 )
-from fraiseql_semis.pin import digest, facts_file
+from fraiseql_semis.pin import digest
 from fraiseql_semis.scenario import Run, ScenarioManager
 from fraiseql_semis.schema import CONFITURE_VERSION, ColumnFacts, SchemaFacts
 from tests.ddl import CODES, CONTRACT, CONTRACT_CODES, HIERARCHY, HIERARCHY_CODES, TRINITY
 
-FACTS = "minimal_seed.facts.json"
 MOVED = TRINITY.replace("name VARCHAR(50) NOT NULL", "name VARCHAR(50)")
 SCENARIO = """\
 scenario_id: 0x5001
@@ -48,13 +44,16 @@ def _run(tmp_path: Path, text: str = SCENARIO, *, ddl: str = TRINITY, no_pin: bo
 
 
 def _pinned(tmp_path: Path) -> str:
-    """The scenario with the pin its first run wrote, copied in beside it as documented."""
-    first = _run(tmp_path / "first")
-    shutil.copy(first.pin_path.parent / FACTS, tmp_path)
-    return SCENARIO + first.pin_path.read_text()
+    """The scenario, its pin taken beside it as semis pin takes it."""
+    tmp_path.mkdir(exist_ok=True)
+    path = tmp_path / "minimal_seed.yaml"
+    path.write_text(SCENARIO)
+    manager = _manager()
+    manager.pin(manager.load(path), path)
+    return SCENARIO
 
 
-def test_prep_seed_writes_the_seeds_in_order_and_the_pin_beside_them(tmp_path: Path) -> None:
+def test_prep_seed_writes_the_seeds_in_order_and_nothing_else(tmp_path: Path) -> None:
     run = _run(tmp_path)
     assert [seed.path.name for seed in run.seeds] == [
         "001_prep_seed.tb_continent.sql",
@@ -63,24 +62,14 @@ def test_prep_seed_writes_the_seeds_in_order_and_the_pin_beside_them(tmp_path: P
     assert sorted(path.name for path in (tmp_path / "out").iterdir()) == [
         "001_prep_seed.tb_continent.sql",
         "002_prep_seed.tb_country.sql",
-        FACTS,
-        "schema_pin.yaml",
     ]
     assert run.notices == ("scenario minimal_seed is unpinned: its schema is not checked",)
 
 
-def test_the_written_pin_is_the_block_a_scenario_records(tmp_path: Path) -> None:
+def test_a_run_carries_the_pin_of_the_schema_it_read(tmp_path: Path) -> None:
     run = _run(tmp_path)
-    block = yaml.safe_load(run.pin_path.read_text())["schema_pin"]
-    assert block == {
-        "source": "ddl",
-        "digest": run.pin.digest,
-        "confiture": CONFITURE_VERSION,
-        "taken": run.pin.taken,
-        "facts": FACTS,
-    }
-    kept = json.loads((tmp_path / "out" / FACTS).read_text())
-    assert digest(kept) == run.pin.digest
+    assert (run.pin.source, run.pin.confiture) == ("ddl", CONFITURE_VERSION)
+    assert digest(run.pin.recorded or []) == run.pin.digest
 
 
 def test_a_pinned_scenario_replays_against_its_schema(tmp_path: Path) -> None:
@@ -92,8 +81,7 @@ def test_a_pinned_scenario_is_refused_against_a_moved_schema(tmp_path: Path) -> 
     text = _pinned(tmp_path)
     with pytest.raises(PinError, match=r"catalog\.tb_continent\.name: not_null true → false"):
         _run(tmp_path, text, ddl=MOVED)
-    written = sorted(path.name for path in (tmp_path / "out").iterdir())
-    assert written == [FACTS, "schema_pin.yaml"]
+    assert list((tmp_path / "out").iterdir()) == []
 
 
 def test_no_pin_runs_against_a_moved_schema_and_says_so(tmp_path: Path) -> None:
@@ -184,104 +172,6 @@ def test_trusting_a_column_the_table_does_not_write_is_refused(tmp_path: Path) -
         )
 
 
-@pytest.mark.parametrize(
-    ("block", "match"),
-    [
-        ("schema_pin: [ddl]\n", "schema_pin is a mapping"),
-        ("schema_pin: {source: ddl}\n", "schema_pin has no confiture, digest, facts, taken"),
-        (
-            "schema_pin: {source: ddl, digest: d, confiture: c, taken: 2026-09-23, by: me}\n",
-            "schema_pin has unknown key by",
-        ),
-        (
-            "schema_pin: {source: git, digest: d, confiture: c, taken: 2026-09-23, facts: f}\n",
-            "schema_pin is malformed",
-        ),
-        (
-            "schema_pin: {source: ddl, digest: d, confiture: c, taken: 2026-09-23,"
-            " facts: minimal_seed.facts.json}\n",
-            "names facts .*minimal_seed.facts.json, which does not exist",
-        ),
-    ],
-)
-def test_a_malformed_pin_block_is_refused(tmp_path: Path, block: str, match: str) -> None:
-    scenario = tmp_path / "s.yaml"
-    scenario.write_text(SCENARIO + block)
-    with pytest.raises(ScenarioError, match=match):
-        _manager().load(scenario)
-
-
-@pytest.mark.parametrize(
-    "block",
-    [
-        "{source: ddl, digest: sha256:0, confiture: 1.27.0, taken: 2026-09-30,"
-        " snapshot: schema_pin.ddl}",
-        "{source: live, digest: sha256:0, confiture: 1.27.0, taken: 2026-09-30}",
-    ],
-    ids=["ddl", "live"],
-)
-def test_a_pin_written_by_0_1_0_is_refused_with_a_hint_to_re_pin(
-    tmp_path: Path, block: str
-) -> None:
-    scenario = tmp_path / "s.yaml"
-    scenario.write_text(SCENARIO + f"schema_pin: {block}\n")
-    with pytest.raises(ScenarioError) as refused:
-        _manager().load(scenario)
-    assert str(refused.value).splitlines() == [
-        "scenario minimal_seed: schema_pin was written by semis 0.1.0, and keeps no facts",
-        "Hint: Re-pin the scenario: delete its schema_pin: block, run it with -o <dir>, then "
-        "put the schema_pin.yaml written beside its seeds in the block's place and the "
-        "minimal_seed.facts.json beside the scenario file.",
-    ]
-
-
-@pytest.mark.parametrize("kept", ["[]", "not json", '[{"table": "catalog.tb_other"}]'])
-def test_facts_that_are_not_the_ones_digested_are_refused(tmp_path: Path, kept: str) -> None:
-    """A stale or swapped facts file would name the wrong changes: it is refused at load."""
-    text = _pinned(tmp_path)
-    (tmp_path / FACTS).write_text(kept)
-    scenario = tmp_path / "s.yaml"
-    scenario.write_text(text)
-    with pytest.raises(ScenarioError, match=rf"{FACTS} does not hold the facts its schema_pin"):
-        _manager().load(scenario)
-
-
-@pytest.mark.parametrize(
-    "named", ["other.facts.json", "../minimal_seed.facts.json", "/etc/hostname"]
-)
-def test_a_pin_naming_any_file_but_its_scenarios_facts_is_refused(
-    tmp_path: Path, named: str
-) -> None:
-    """A pin is read beside its scenario, from the one file a run of it writes: never from
-    a path the pin names, which could be anywhere."""
-    text = _pinned(tmp_path).replace(f"facts: {FACTS}", f"facts: {named}")
-    (tmp_path / "other.facts.json").write_text((tmp_path / FACTS).read_text())
-    scenario = tmp_path / "s.yaml"
-    scenario.write_text(text)
-    with pytest.raises(ScenarioError) as refused:
-        _manager().load(scenario)
-    assert str(refused.value).splitlines() == [
-        f"scenario minimal_seed: schema_pin names facts {named}, where a run of it keeps "
-        f"them in {FACTS}",
-        "Hint: Paste the block of the schema_pin.yaml one run wrote into the scenario, and "
-        "copy that run's facts file beside it, both unchanged.",
-    ]
-
-
-def test_facts_nested_past_what_json_reads_are_refused(tmp_path: Path) -> None:
-    text = _pinned(tmp_path)
-    (tmp_path / FACTS).write_text("[" * 100_000 + "]" * 100_000)
-    scenario = tmp_path / "s.yaml"
-    scenario.write_text(text)
-    with pytest.raises(ScenarioError, match=rf"{FACTS} does not hold the facts its schema_pin"):
-        _manager().load(scenario)
-
-
-def test_the_facts_file_is_named_after_the_scenario() -> None:
-    assert facts_file("catalog.tb_continent") == "catalog.tb_continent.facts.json"
-    assert facts_file("a.b") == "a.b.facts.json"
-
-
 def test_a_prep_seed_hierarchy_is_one_file_its_children_carrying_parent_uuids(
     tmp_path: Path,
 ) -> None:
@@ -351,6 +241,41 @@ def test_a_nullable_foreign_key_overridden_null_needs_no_parent(tmp_path: Path) 
     run = _run(tmp_path, COUNTRIES_ALONE, ddl=OPTIONAL_CONTINENT)
     (seed,) = run.seeds
     assert seed.path.read_text().count("NULL") == 2
+
+
+def test_a_nullable_foreign_key_without_a_parent_is_written_null(tmp_path: Path) -> None:
+    run = _run(
+        tmp_path,
+        COUNTRIES_ALONE.replace("    overrides:\n      fk_continent: null\n", ""),
+        ddl=OPTIONAL_CONTINENT,
+    )
+    (seed,) = run.seeds
+    assert seed.path.read_text().count("NULL") == 2
+    assert run.notices[1:] == (
+        "catalog.tb_country leaves fk_continent NULL; a parent under tables: points them",
+    )
+
+
+def test_a_nullable_foreign_key_to_a_parent_drawing_no_rows_is_written_null(
+    tmp_path: Path,
+) -> None:
+    """A parent in the run with count: 0 counts as no parent."""
+    text = SCENARIO.replace("count: 2\n", "count: 0\n")
+    run = _run(tmp_path, text, ddl=OPTIONAL_CONTINENT)
+    countries = run.seeds[-1].path.read_text()
+    assert countries.count("NULL") == 4
+
+
+def test_a_not_null_key_whose_parent_the_run_lacks_is_still_refused(tmp_path: Path) -> None:
+    scenario = tmp_path / "orphans.yaml"
+    scenario.write_text(COUNTRIES_ALONE.replace("    overrides:\n      fk_continent: null\n", ""))
+    manager = _manager(TRINITY)
+    with pytest.raises(
+        ResolutionError,
+        match=r"^scenario minimal_seed: catalog\.tb_country\.fk_continent references "
+        r"catalog\.tb_continent, which has no rows in this run",
+    ):
+        manager.check(manager.load(scenario))
 
 
 def test_a_not_null_key_left_null_is_refused_before_a_row_is_drawn(tmp_path: Path) -> None:

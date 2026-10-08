@@ -5,34 +5,49 @@ never infers the mode (D3). Nothing in a scenario is evaluated: a provider is na
 the name is looked up among the providers the caller registered.
 """
 
-import json
 import re
-import shlex
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TypedDict, cast, get_args
+from uuid import UUID
 
 import yaml
 
-from fraiseql_semis import emit, readback, seeds
+from fraiseql_semis import emit, pin_file, readback, seeds
 from fraiseql_semis.errors import (
     AlreadyAppliedError,
     CodeRegistryError,
+    ResetBlockedError,
+    ResetScopeError,
     ResolutionError,
     RowContractError,
     ScenarioError,
     SchemaNotBuiltError,
     SemisError,
+    refuse_unknown,
 )
 from fraiseql_semis.faker_provider import LOCALES, CustomProviderRegistry, Library, Provider
-from fraiseql_semis.generator import FakeDataGenerator, Fill, Override, check_override_lengths
+from fraiseql_semis.generator import (
+    Copied,
+    FakeDataGenerator,
+    Fill,
+    Override,
+    check_override_lengths,
+)
 from fraiseql_semis.hierarchy import Hierarchy, refuse_path_in_prep_seed
-from fraiseql_semis.pin import SchemaPin, digest, facts_file, verify
+from fraiseql_semis.pin import SchemaPin, describe_changes, verify
 from fraiseql_semis.resolution import EXISTING_BY
-from fraiseql_semis.schema import Connection, ObjectRef, SchemaFacts, SeedFile, TableFacts
+from fraiseql_semis.schema import (
+    Connection,
+    LiveSchema,
+    ObjectRef,
+    SchemaFacts,
+    SeedFile,
+    TableFacts,
+)
 from fraiseql_semis.seeds import Mode
 from fraiseql_semis.staging import Staging
 from fraiseql_semis.uuid_generator import scenario_bounds
@@ -48,10 +63,17 @@ _SCENARIO_KEYS = {
     "seed",
     "tables",
     "existing",
-    "schema_pin",
 }
-PIN_FILE = "schema_pin.yaml"
-_TABLE_KEYS = {"name", "count", "overrides", "providers", "fill", "trusts_trigger", "hierarchy"}
+_TABLE_KEYS = {
+    "name",
+    "count",
+    "overrides",
+    "providers",
+    "fill",
+    "trusts_trigger",
+    "hierarchy",
+    "copies",
+}
 _HIERARCHY_KEYS = {"parent", "roots", "fan_out", "path"}
 _EXISTING_KEYS = {"name", "where"}
 _SCENARIO_ID_LIMIT = 1 << 16  # a scenario id is the UUID's fifth and sixth bytes
@@ -68,7 +90,8 @@ class TableSpec:
     taking the row's 0-based index. *providers* maps a column to the name of a registered
     provider. *fill* names the nullable columns drawn rather than written ``NULL``, or
     is ``"all"``. *trusts_trigger* names the columns a trigger fills. *hierarchy* shapes
-    a table whose foreign key points at itself.
+    a table whose foreign key points at itself. *copies* maps a column to where its value
+    is copied from: a column of the row one of the table's foreign keys points at.
     """
 
     name: str
@@ -78,6 +101,7 @@ class TableSpec:
     fill: Fill = frozenset()
     trusts_trigger: frozenset[str] = frozenset()
     hierarchy: Hierarchy | None = None
+    copies: Mapping[str, Copied] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _qualified("table", self.name)
@@ -95,6 +119,38 @@ class TableSpec:
                 f"{self.name}: {', '.join(both)} is both overridden and trusted to a trigger",
                 resolution_hint="A trigger fills a column semis leaves out; drop one of the two.",
             )
+        self._check_copies()
+
+    def _check_copies(self) -> None:
+        """Refuse a copied column the table also names another way."""
+        named = {
+            "overridden": set(self.overrides),
+            "given a provider": set(self.providers),
+            "under fill:": set() if self.fill == "all" else set(self.fill),
+            "trusted to a trigger": set(self.trusts_trigger),
+        }
+        for how, columns in named.items():
+            both = sorted(columns.intersection(self.copies))
+            if both:
+                raise ScenarioError(
+                    f"{self.name}: {', '.join(both)} is both copied and {how}",
+                    resolution_hint=(
+                        "A copied column holds its parent row's value; drop one of the two."
+                    ),
+                )
+
+
+@dataclass(frozen=True)
+class Deleted:
+    """What a reset did to one table: the scenario's *rows* deleted, and the *kept* rows
+    it still holds, which the scenario did not write. *restarted* says whether its
+    identity was restarted, which it is when no row is kept; ``None`` for a table with
+    no identity column."""
+
+    table: str
+    rows: int
+    kept: int
+    restarted: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -123,7 +179,7 @@ class Scenario:
     locale: str = "en_US"
     seed: int | None = None
     description: str = ""
-    schema_pin: SchemaPin | None = None
+    pin: SchemaPin | None = None
     existing: tuple[ExistingTable, ...] = ()
 
     def __post_init__(self) -> None:
@@ -146,7 +202,7 @@ class Scenario:
                 f"scenario {self.name} lists {', '.join(repeated)} more than once",
                 resolution_hint="Give each table one entry, with the total count.",
             )
-        self._check_existing(names)
+        self._check_existing_lists(names)
 
     def _check_header(self) -> None:
         """Refuse a description, seed or locale of the wrong type: Faker would otherwise
@@ -168,7 +224,9 @@ class Scenario:
                 resolution_hint="Name one of Faker's locales, e.g. en_US or fr_FR.",
             )
 
-    def _check_existing(self, written: list[str]) -> None:
+    def _check_existing_lists(self, written: list[str]) -> None:
+        """Refuse an ``existing:`` list that repeats a table, names one the run writes,
+        or is given to a prep-seed scenario."""
         read = [table.name for table in self.existing]
         repeated = sorted({name for name in read if read.count(name) > 1})
         if repeated:
@@ -236,12 +294,10 @@ def catalogue(directory: Path) -> tuple[ScenarioEntry, ...]:
     The files are the registry of scenario ids: an id is written in its scenario and
     nowhere else. Only the header is read, so no schema is needed, and its name and id
     are checked as a load checks them. A directory that does not exist holds no
-    scenarios; a ``schema_pin.yaml`` a run wrote there is not one.
+    scenarios.
     """
     entries = []
     for path in sorted(directory.rglob("*.yaml")):
-        if path.name == PIN_FILE:
-            continue
         data = read_yaml(path, ScenarioError, _SCENARIO_YAML)
         if not isinstance(data, dict) or "scenario_id" not in data or "name" not in data:
             raise ScenarioError(
@@ -307,16 +363,34 @@ class Run:
     scenario: Scenario
     seeds: tuple[SeedFile, ...]
     pin: SchemaPin
-    pin_path: Path
     notices: tuple[str, ...]
 
 
 @dataclass(frozen=True)
+class PinChange:
+    """What ``ScenarioManager.pin`` found: the pin file at *path*, the schema's *pin*,
+    what moved since the *previous* pin the file kept, and whether it was *written*.
+
+    *changed* is false when the file already keeps this pin: then nothing is written.
+    """
+
+    path: Path
+    pin: SchemaPin
+    previous: SchemaPin | None
+    changes: tuple[str, ...]
+    changed: bool
+    written: bool
+
+
+@dataclass(frozen=True)
 class Validation:
-    """A prep-seed scenario's rehearsal, and confiture's report on exactly its files."""
+    """A prep-seed scenario's rehearsal, and confiture's report on exactly its files,
+    which it wrote to *seeds_dir*, deleted since: the directory a finding's path is
+    relative to."""
 
     run: Run
     report: seeds.PrepSeedReport
+    seeds_dir: Path
 
 
 class ScenarioManager:
@@ -345,8 +419,13 @@ class ScenarioManager:
                     raise ValueError(f"{name} is both a provider and a library's")
                 self._providers[name] = provider
 
-    def load(self, path: Path | str) -> Scenario:
-        """The scenario in the YAML file at *path*, refused with ``ScenarioError`` if malformed."""
+    def load(self, path: Path | str, *, read_pin: bool = True) -> Scenario:
+        """The scenario in the YAML file at *path*, refused with ``ScenarioError`` if
+        malformed, with the pin ``<name>.pin.json`` beside it keeps, when there is one.
+
+        *read_pin* false loads it unpinned, whatever that file holds: ``semis pin``, which
+        repairs the file, is not stopped by it.
+        """
         data = read_yaml(Path(path), ScenarioError, _SCENARIO_YAML)
         if not isinstance(data, dict):
             raise ScenarioError(
@@ -354,7 +433,8 @@ class ScenarioManager:
                 resolution_hint="A scenario file maps scenario_id:, name:, mode: and tables:.",
             )
         where = f"{path}"
-        _refuse_unknown(where, data, _SCENARIO_KEYS)
+        _refuse_0_2_0_pin(Path(path), data)
+        refuse_unknown(where, data, _SCENARIO_KEYS, error=ScenarioError)
         for key in ("scenario_id", "name", "tables"):
             if key not in data:
                 raise ScenarioError(f"{where} has no {key}:", resolution_hint=_MISSING_HINTS[key])
@@ -380,7 +460,11 @@ class ScenarioManager:
             locale=data.get("locale", "en_US"),
             seed=data.get("seed"),
             description=data.get("description", ""),
-            schema_pin=_pin(data, Path(path).parent),
+            pin=(
+                pin_file.read(pin_file.path_for(Path(path), data["name"]), scenario=data["name"])
+                if read_pin
+                else None
+            ),
             existing=existing,
         )
         self._check_providers(scenario)
@@ -406,11 +490,9 @@ class ScenarioManager:
         """
         if connection is not None and scenario.mode == "read-back":
             self._refuse_reapply(scenario, connection)
-        return self._execute(
-            scenario, out_dir, connection=connection, format=format, no_pin=no_pin, pin_kept=True
-        )
+        return self._execute(scenario, out_dir, connection=connection, format=format, no_pin=no_pin)
 
-    def _execute(  # noqa: PLR0913 — execute's, and whether the caller keeps *out_dir*
+    def _execute(
         self,
         scenario: Scenario,
         out_dir: Path,
@@ -418,14 +500,11 @@ class ScenarioManager:
         connection: Connection | None,
         format: seeds.Format | None,
         no_pin: bool,
-        pin_kept: bool,
     ) -> Run:
-        """``execute``, its refusal of a moved pin naming the pin only when *pin_kept*."""
         self._require_tables(scenario)
         self._check_providers(scenario)
         out_dir.mkdir(parents=True, exist_ok=True)
-        pin, pin_path = self._write_pin(scenario, out_dir)
-        notices = self._check(scenario, no_pin=no_pin, pin_kept=pin_kept)
+        notices = self._check(scenario, no_pin=no_pin)
         generator = self._generator(scenario)
         counts, drawn = _walk_arguments(scenario)
         if scenario.mode == "prep-seed":
@@ -459,12 +538,12 @@ class ScenarioManager:
                     format=format,
                     existing={table.name: table.identifiers for table in scenario.existing},
                 )
-        return Run(scenario, tuple(written), pin, pin_path, notices)
+        return Run(scenario, tuple(written), self._schema_pin(scenario), notices)
 
     def apply(
         self,
         scenario: Scenario,
-        out_dir: Path,
+        out_dir: Path | None = None,
         *,
         connection: Connection,
         format: seeds.Format | None = None,
@@ -476,12 +555,19 @@ class ScenarioManager:
         Read-back applies each table as it is written, as ``execute`` does. Prep-seed
         writes every file first, then applies them in the order written. A database
         that already holds the scenario's rows is refused before anything is written.
+        The seed files are written to *out_dir*; without one, to a directory deleted
+        before this returns, so the returned ``Run``'s paths no longer exist.
         """
-        return self._apply(
-            scenario, out_dir, connection=connection, format=format, no_pin=no_pin, pin_kept=True
-        )
+        if out_dir is not None:
+            return self._apply(
+                scenario, out_dir, connection=connection, format=format, no_pin=no_pin
+            )
+        with TemporaryDirectory(prefix="semis-") as directory:
+            return self._apply(
+                scenario, Path(directory), connection=connection, format=format, no_pin=no_pin
+            )
 
-    def _apply(  # noqa: PLR0913 — apply's, and whether the caller keeps *out_dir*
+    def _apply(
         self,
         scenario: Scenario,
         out_dir: Path,
@@ -489,7 +575,6 @@ class ScenarioManager:
         connection: Connection,
         format: seeds.Format | None,
         no_pin: bool,
-        pin_kept: bool,
     ) -> Run:
         self._refuse_reapply(scenario, connection)
         if scenario.mode == "read-back":
@@ -499,11 +584,8 @@ class ScenarioManager:
                 connection=connection,
                 format=format,
                 no_pin=no_pin,
-                pin_kept=pin_kept,
             )
-        run = self._execute(
-            scenario, out_dir, connection=None, format=format, no_pin=no_pin, pin_kept=pin_kept
-        )
+        run = self._execute(scenario, out_dir, connection=None, format=format, no_pin=no_pin)
         seeds.apply(connection, [seed.path for seed in run.seeds])
         return run
 
@@ -530,7 +612,6 @@ class ScenarioManager:
                     connection=None,
                     format=format,
                     no_pin=no_pin,
-                    pin_kept=False,
                 )
             return self._apply(
                 scenario,
@@ -538,7 +619,6 @@ class ScenarioManager:
                 connection=connection,
                 format=format,
                 no_pin=no_pin,
-                pin_kept=False,
             )
 
     def validate(  # noqa: PLR0913 — one positional; the rest are keyword-only
@@ -572,7 +652,6 @@ class ScenarioManager:
                 connection=None,
                 format=format,
                 no_pin=no_pin,
-                pin_kept=False,
             )
             report = self.validate_seeds(
                 directory,
@@ -581,7 +660,7 @@ class ScenarioManager:
                 connection=connection,
                 catalog_schema=catalog_schema,
             )
-        return Validation(run, report)
+        return Validation(run, report, Path(directory))
 
     def validate_seeds(
         self,
@@ -611,27 +690,25 @@ class ScenarioManager:
         checked against its table. Returns what the pin check did, then a line per table
         that leaves nullable columns ``NULL``, for the caller to show.
         """
-        return self._check(scenario, no_pin=no_pin, pin_kept=False)
+        return self._check(scenario, no_pin=no_pin)
 
-    def _check(self, scenario: Scenario, *, no_pin: bool, pin_kept: bool) -> tuple[str, ...]:
-        """``check``, its refusal of a moved pin naming the pin only when *pin_kept*."""
+    def _check(self, scenario: Scenario, *, no_pin: bool) -> tuple[str, ...]:
         with _naming(scenario.name):
-            return self._checked(scenario, no_pin=no_pin, pin_kept=pin_kept)
+            return self._checked(scenario, no_pin=no_pin)
 
-    def _checked(self, scenario: Scenario, *, no_pin: bool, pin_kept: bool) -> tuple[str, ...]:
+    def _checked(self, scenario: Scenario, *, no_pin: bool) -> tuple[str, ...]:
         self._require_tables(scenario)
         self._check_providers(scenario)
         tables = [spec.name for spec in scenario.tables]
-        self._check_existing(scenario)
+        self._check_existing_keys(scenario)
         notice = verify(
-            scenario.schema_pin,
+            scenario.pin,
             self._facts,
             tables,
             scenario=scenario.name,
             twins=self._twins(scenario),
             existing=[table.name for table in scenario.existing],
             no_pin=no_pin,
-            pin_kept=pin_kept,
         )
         counts, drawn = _walk_arguments(scenario)
         generator = self._generator(scenario)
@@ -655,7 +732,7 @@ class ScenarioManager:
                     resolution_hint="Name a table the schema holds, schema-qualified.",
                 )
 
-    def _check_existing(self, scenario: Scenario) -> None:
+    def _check_existing_keys(self, scenario: Scenario) -> None:
         """Refuse an existing table read-back cannot point a key at: one with no
         surrogate key, or narrowed by a ``where:`` it has no identifier column for."""
         for existing in scenario.existing:
@@ -682,13 +759,7 @@ class ScenarioManager:
         """
         self._require_tables(scenario)
         with _naming(scenario.name):
-            written: list[tuple[ObjectRef, TableFacts]] = []
-            for ref in self._facts.insert_order([spec.name for spec in scenario.tables]):
-                table = self._facts.facts_for(ref.display)
-                written.append((table.ref, table))
-                twin = self._facts.ref(self._staging.twin(table.ref))
-                if scenario.mode == "prep-seed" and twin is not None:
-                    written.append((twin, table))
+            written = self._written(scenario)
             found = next(
                 (
                     ref
@@ -704,14 +775,149 @@ class ScenarioManager:
                 None,
             )
         if found is not None:
-            statement = readback.reset([ref for ref, _ in written])
             raise AlreadyAppliedError(
                 f"scenario {scenario.name} is already applied: {found.display} holds its rows",
                 resolution_hint=(
-                    "A scenario applies once, to a reset database. Reset it with psql -c "
-                    f"{shlex.quote(statement)}, or recreate the database, then apply again."
+                    "A scenario applies once, to a reset database. Apply it with semis "
+                    "apply --reset, or run semis reset first: either deletes the "
+                    "scenario's rows, and only those."
                 ),
             )
+
+    def reset(self, scenario: Scenario, *, connection: Connection) -> tuple[Deleted, ...]:
+        """Delete the rows *scenario* wrote, and only those, on *connection*, whose
+        transaction stays the caller's: children before parents, each table by the
+        scenario's UUID range on its natural id, as the re-apply check reads it. A table
+        left empty has its identity restarted, so a table the scenario owns alone
+        re-applies as it first did.
+
+        Every table is scoped before any row is deleted: one with no uuid natural id is
+        refused, and nothing is deleted. A table the run does not write, an
+        ``existing:`` one among them, is never touched. A caller on its own connection
+        takes ``readback.exclusive`` first, as for ``apply``.
+        """
+        self._require_tables(scenario)
+        scoped = self._scoped(scenario)
+        deleted: list[Deleted] = []
+        with _naming(scenario.name):
+            live = LiveSchema.read(connection)
+            self._refuse_pointed_at(scenario, connection, scoped, live)
+            for ref, natural_id, bounds in reversed(scoped):
+                rows = readback.delete_range(connection, ref, natural_id, bounds)
+                kept = readback.count(connection, ref)
+                identities = live.identities(ref)
+                if identities and not kept:
+                    readback.restart(connection, ref, identities)
+                restarted = not kept if identities else None
+                deleted.append(Deleted(ref.display, rows, kept, restarted))
+        return tuple(deleted)
+
+    def _refuse_pointed_at(
+        self,
+        scenario: Scenario,
+        connection: Connection,
+        scoped: list[tuple[ObjectRef, str, tuple[UUID, UUID]]],
+        live: LiveSchema,
+    ) -> None:
+        """Refuse a reset when a row the scenario did not write points at one it did: a
+        row of a table outside the run, or of a run table outside its range.
+
+        Every foreign key into the run's tables is asked, from any schema, whatever its
+        ``ON DELETE``: a ``CASCADE`` or ``SET NULL`` would otherwise reach a row semis did
+        not write. Each referencing table is locked ``SHARE`` first, so no row starts
+        pointing in before the delete.
+        """
+        ranges = {ref.display: (natural_id, bounds) for ref, natural_id, bounds in scoped}
+        references = live.references_into([ref for ref, _, _ in scoped])
+        referencing = {reference.table.display: reference.table for reference in references}
+        readback.lock_shared(connection, [referencing[name] for name in sorted(referencing)])
+        for reference in references:
+            natural_id, bounds = ranges[reference.target.display]
+            rows = readback.pointing(
+                connection,
+                reference,
+                natural_id=natural_id,
+                bounds=bounds,
+                own=ranges.get(reference.table.display),
+            )
+            if rows:
+                raise ResetBlockedError(
+                    f"scenario {scenario.name}: "
+                    + ("1 row" if rows == 1 else f"{rows} rows")
+                    + f" of {reference.table.display} point{'s' if rows == 1 else ''} at its rows "
+                    f"of {reference.target.display}, by {reference.constraint}",
+                    resolution_hint=(
+                        "semis deletes only the scenario's rows, and never through a "
+                        "cascade: delete or repoint those rows first, or recreate the "
+                        "database."
+                    ),
+                )
+
+    def _scoped(self, scenario: Scenario) -> list[tuple[ObjectRef, str, tuple[UUID, UUID]]]:
+        """Each table *scenario*'s run writes into, in insert order, with the natural id
+        and the range its rows hold; refused when a table has no uuid natural id."""
+        scoped: list[tuple[ObjectRef, str, tuple[UUID, UUID]]] = []
+        for ref, table in self._written(scenario):
+            natural_id = self._asked_by(ref, table)
+            if natural_id is None:
+                raise ResetScopeError(
+                    f"scenario {scenario.name}: {ref.display} has no uuid id, so the "
+                    "reset cannot tell the scenario's rows there from others",
+                    resolution_hint=(
+                        "Recreate the database, or delete that table's rows yourself; "
+                        "semis deletes only rows it can find by their UUID."
+                    ),
+                )
+            scoped.append((ref, natural_id, scenario_bounds(table.table_code, scenario.id)))
+        return scoped
+
+    def pin(self, scenario: Scenario, path: Path | str, *, check: bool = False) -> PinChange:
+        """Take *scenario*'s pin from this schema, into the pin file beside its scenario
+        file at *path*; with *check*, write nothing, and say only whether it would.
+
+        The file is written only when the pin moved, so its ``taken`` date does not churn.
+        A pin file that does not read is replaced: this is the call that repairs one.
+        """
+        target = pin_file.path_for(Path(path), scenario.name)
+        current = self._schema_pin(scenario)
+        try:
+            previous = pin_file.read(target, scenario=scenario.name)
+        except ScenarioError:
+            previous = None
+        if previous is not None and previous.digest == current.digest:
+            return PinChange(target, current, previous, (), changed=False, written=False)
+        changes = (
+            ()
+            if previous is None
+            else describe_changes(previous.recorded or [], current.recorded or [])
+        )
+        if not check:
+            pin_file.write(target, current)
+        return PinChange(target, current, previous, changes, changed=True, written=not check)
+
+    def _schema_pin(self, scenario: Scenario) -> SchemaPin:
+        """The pin of *scenario*'s tables, twins and existing tables as this schema reads
+        them."""
+        self._require_tables(scenario)
+        return SchemaPin.of(
+            self._facts,
+            [spec.name for spec in scenario.tables],
+            twins=self._twins(scenario),
+            existing=[table.name for table in scenario.existing],
+        )
+
+    def _written(self, scenario: Scenario) -> list[tuple[ObjectRef, TableFacts]]:
+        """Each table *scenario*'s run writes into, in insert order, with the facts its
+        rows are drawn from: in prep-seed, each table's staging twin after it, since the
+        twins' rows are promoted into the final tables."""
+        written: list[tuple[ObjectRef, TableFacts]] = []
+        for ref in self._facts.insert_order([spec.name for spec in scenario.tables]):
+            table = self._facts.facts_for(ref.display)
+            written.append((table.ref, table))
+            twin = self._facts.ref(self._staging.twin(table.ref))
+            if scenario.mode == "prep-seed" and twin is not None:
+                written.append((twin, table))
+        return written
 
     def _asked_by(self, ref: ObjectRef, table: TableFacts) -> str | None:
         """The column the check asks *ref*, *table* or its twin, by for the scenario's UUID
@@ -743,23 +949,6 @@ class ScenarioManager:
             providers=registry,
         )
 
-    def _write_pin(self, scenario: Scenario, out_dir: Path) -> tuple[SchemaPin, Path]:
-        """The pin of *scenario*'s tables and twins as this schema reads them, written
-        with the facts it digested, in a file named after the scenario."""
-        tables = [spec.name for spec in scenario.tables]
-        pin = SchemaPin.of(
-            self._facts,
-            tables,
-            twins=self._twins(scenario),
-            existing=[table.name for table in scenario.existing],
-        )
-        facts = facts_file(scenario.name)
-        (out_dir / facts).write_text(json.dumps(pin.recorded, indent=2, sort_keys=True) + "\n")
-        pin = pin.with_facts(facts)
-        pin_path = out_dir / PIN_FILE
-        pin_path.write_text(yaml.safe_dump({"schema_pin": pin.to_mapping()}, sort_keys=False))
-        return pin, pin_path
-
     def _table(self, scenario: str, entry: object) -> TableSpec:
         if not isinstance(entry, dict) or "name" not in entry:
             raise ScenarioError(
@@ -769,7 +958,9 @@ class ScenarioManager:
                 ),
             )
         name = entry["name"]
-        _refuse_unknown(f"scenario {scenario}, table {name}", entry, _TABLE_KEYS)
+        refuse_unknown(
+            f"scenario {scenario}, table {name}", entry, _TABLE_KEYS, error=ScenarioError
+        )
         if "count" not in entry:
             raise ScenarioError(
                 f"scenario {scenario}: {name} has no count:",
@@ -802,6 +993,7 @@ class ScenarioManager:
             fill=_fill(name, entry),
             trusts_trigger=frozenset(trusted),
             hierarchy=_hierarchy(name, entry),
+            copies=_copies(name, entry),
         )
 
     def _check_providers(self, scenario: Scenario) -> None:
@@ -825,7 +1017,6 @@ _SCENARIO_YAML = (
 _TABLES_HINT = "List at least one table under tables:, each with a name: and a count:."
 _HIERARCHY_HINT = "Write hierarchy: {parent: <self-FK column>, roots: <n>, fan_out: <n>}."
 _EXISTING_HINT = "Write existing: as a list of entries, each - name: <schema.table>."
-_PIN_HINT = "Copy the block a run wrote to schema_pin.yaml, unchanged."
 
 
 _MISSING_HINTS = {
@@ -866,7 +1057,11 @@ def _naming(scenario: str) -> Iterator[None]:
 
 
 def _left_null_notices(generator: FakeDataGenerator, scenario: Scenario) -> Iterator[str]:
-    """A line per table that writes nullable columns ``NULL`` because nobody names them."""
+    """A line per table that writes columns ``NULL`` because nobody names them: nullable
+    value columns, and nullable keys whose parent has no rows in the run."""
+    counts = {spec.name: spec.count for spec in scenario.tables}
+    existing = frozenset(table.name for table in scenario.existing)
+    parents = "tables: or existing:" if scenario.mode == "read-back" else "tables:"
     for spec in scenario.tables:
         columns = generator.left_null(
             spec.name,
@@ -874,9 +1069,24 @@ def _left_null_notices(generator: FakeDataGenerator, scenario: Scenario) -> Iter
             overrides=spec.overrides,
             fill=spec.fill,
             hierarchy=spec.hierarchy,
+            counts=counts,
+            existing=existing,
+            copies=spec.copies,
         )
-        if columns:
-            yield f"{spec.name} leaves {', '.join(columns)} NULL; fill: draws them"
+        if not columns:
+            continue
+        keys = {
+            column.name
+            for column in generator.facts.facts_for(spec.name).columns
+            if column.foreign_key is not None
+        }
+        if not keys.intersection(columns):
+            hint = "fill: draws them"
+        elif keys.issuperset(columns):
+            hint = f"a parent under {parents} points them"
+        else:
+            hint = f"fill: draws the values, a parent under {parents} points the keys"
+        yield f"{spec.name} leaves {', '.join(columns)} NULL; {hint}"
 
 
 def _override_notice(scenario: Scenario, name: str, value: object) -> str:
@@ -940,47 +1150,25 @@ def _modes() -> str:
     return " or ".join(MODES)
 
 
-def _pin(data: Mapping[str, object], directory: Path) -> SchemaPin | None:
-    """The scenario's recorded pin, with the facts it keeps beside the scenario file,
-    which must be the facts its digest was taken from."""
-    block = data.get("schema_pin")
-    if block is None:
-        return None
-    name = str(data["name"])
-    if not isinstance(block, dict):
-        raise ScenarioError(f"scenario {name}: schema_pin is a mapping", resolution_hint=_PIN_HINT)
-    pin = SchemaPin.from_mapping(block, scenario=name)
-    if pin.facts != facts_file(name):
-        raise ScenarioError(
-            f"scenario {name}: schema_pin names facts {pin.facts}, where a run of it keeps "
-            f"them in {facts_file(name)}",
-            resolution_hint=(
-                "Paste the block of the schema_pin.yaml one run wrote into the scenario, and "
-                "copy that run's facts file beside it, both unchanged."
-            ),
-        )
-    path = directory / facts_file(name)
-    if not path.is_file():
-        raise ScenarioError(
-            f"scenario {name}: schema_pin names facts {path}, which does not exist",
-            resolution_hint=(
-                f"Copy the {pin.facts} a run wrote beside its schema_pin.yaml to beside the "
-                "scenario file."
-            ),
-        )
-    try:
-        recorded = json.loads(path.read_text())
-    except ValueError, RecursionError:
-        recorded = None
-    if recorded is None or digest(recorded) != pin.digest:
-        raise ScenarioError(
-            f"scenario {name}: {path} does not hold the facts its schema_pin digested",
-            resolution_hint=(
-                "Paste the block of the schema_pin.yaml one run wrote into the scenario, and "
-                "copy that run's facts file beside it."
-            ),
-        )
-    return pin.with_facts(str(pin.facts), recorded)
+def _refuse_0_2_0_pin(path: Path, data: Mapping[str, object]) -> None:
+    """Refuse a scenario that keeps a pin the way 0.2.0 did: a ``schema_pin:`` block, or
+    the facts file beside it. Its pin lives in ``<name>.pin.json``, written by
+    ``semis pin``."""
+    name = data.get("name")
+    facts = path.parent / f"{name}.facts.json"
+    if "schema_pin" in data:
+        found = "keeps a schema_pin: block"
+    elif isinstance(name, str) and facts.is_file():
+        found = f"has {facts.name} beside it"
+    else:
+        return
+    raise ScenarioError(
+        f"scenario {name} {found}, where semis 0.2.0 kept its pin; the pin is now "
+        f"{name}{pin_file.SUFFIX}, beside the scenario",
+        resolution_hint=(
+            f"Delete the schema_pin: block and {name}.facts.json, then run semis pin {path}."
+        ),
+    )
 
 
 def _qualified(kind: str, name: object) -> None:
@@ -1010,7 +1198,7 @@ def _existing_table(scenario: str, entry: object) -> ExistingTable:
         )
     name = entry["name"]
     where = f"scenario {scenario}, existing {name}"
-    _refuse_unknown(where, entry, _EXISTING_KEYS)
+    refuse_unknown(where, entry, _EXISTING_KEYS, error=ScenarioError)
     if "where" not in entry:
         return ExistingTable(name)
     block = entry["where"]
@@ -1037,7 +1225,7 @@ def _hierarchy(table: str, entry: Mapping[str, object]) -> Hierarchy | None:
             f"{table}: hierarchy maps parent, roots and fan_out to their values",
             resolution_hint=_HIERARCHY_HINT,
         )
-    _refuse_unknown(f"{table}: hierarchy", block, _HIERARCHY_KEYS)
+    refuse_unknown(f"{table}: hierarchy", block, _HIERARCHY_KEYS, error=ScenarioError)
     missing = sorted({"parent", "roots"} - set(block))
     if missing:
         raise ScenarioError(
@@ -1064,11 +1252,37 @@ def _fill(table: str, entry: Mapping[str, object]) -> Fill:
     return frozenset(fill)
 
 
+_COPIES = re.compile(r"([^.]+)\.([^.]+)")
+"""``<foreign key>.<parent column>``, each part a column name."""
+
+
+def _copies(table: str, entry: Mapping[str, object]) -> dict[str, Copied]:
+    """The table's ``copies:``: each column, and the key and parent column it copies."""
+    block = entry.get("copies", {})
+    if not isinstance(block, dict):
+        raise _malformed_copies(table)
+    copies: dict[str, Copied] = {}
+    for column, source in cast("dict[object, object]", block).items():
+        matched = _COPIES.fullmatch(source) if isinstance(source, str) else None
+        if not isinstance(column, str) or matched is None:
+            raise _malformed_copies(table)
+        copies[column] = Copied(*matched.groups())
+    return copies
+
+
+def _malformed_copies(table: str) -> ScenarioError:
+    return ScenarioError(
+        f"{table}: copies maps a column to <foreign key>.<parent column>",
+        resolution_hint="Write copies: {column: fk_column.parent_column}.",
+    )
+
+
 class _Drawn(TypedDict):
     trusted: dict[str, frozenset[str]]
     overrides: dict[str, Mapping[str, Override]]
     fill: dict[str, Fill]
     hierarchies: dict[str, Hierarchy]
+    copies: dict[str, Mapping[str, Copied]]
 
 
 def _walk_arguments(scenario: Scenario) -> tuple[dict[str, int], _Drawn]:
@@ -1081,16 +1295,8 @@ def _walk_arguments(scenario: Scenario) -> tuple[dict[str, int], _Drawn]:
         hierarchies={
             spec.name: spec.hierarchy for spec in scenario.tables if spec.hierarchy is not None
         },
+        copies={spec.name: spec.copies for spec in scenario.tables if spec.copies},
     )
-
-
-def _refuse_unknown(where: str, data: Mapping[object, object], known: set[str]) -> None:
-    unknown = sorted(str(key) for key in set(data) - known)
-    if unknown:
-        raise ScenarioError(
-            f"{where}: unknown key {', '.join(unknown)}",
-            resolution_hint=f"Known keys: {', '.join(sorted(known))}.",
-        )
 
 
 _ENTRIES = {"overrides": "<value>", "providers": "<provider name>"}

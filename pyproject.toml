@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fraiseql-semis"
-version = "0.2.0"
+version = "0.3.0"
 description = "Semantic UUID-encoded fake data generator for PostgreSQL trinity pattern schemas"
 readme = "README.md"
 requires-python = ">=3.14"

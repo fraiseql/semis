@@ -4,6 +4,8 @@ Confiture's exceptions propagate unwrapped (D11); these are raised only for what
 itself refuses.
 """
 
+from collections.abc import Mapping, Set
+
 
 class SemisError(Exception):
     """A refusal semis makes. Shaped like ``ConfiturError`` without being one."""
@@ -58,6 +60,20 @@ class AlreadyAppliedError(SemisError):
     error_code = "SEMIS_APPLY_001"
 
 
+class ResetBlockedError(SemisError):
+    """A reset of a scenario whose rows a row it did not write points at: deleting them
+    would break that key, or reach that row through a cascade, so none is deleted."""
+
+    error_code = "SEMIS_RESET_001"
+
+
+class ResetScopeError(SemisError):
+    """A reset of a scenario one of whose tables has no uuid natural id: the scenario's
+    rows there cannot be told from others, so none is deleted."""
+
+    error_code = "SEMIS_RESET_002"
+
+
 class UnreachableDatabaseError(SemisError):
     """A database semis was told to connect to, which did not answer."""
 
@@ -110,3 +126,16 @@ class IncomparablePinError(PinError):
     """
 
     error_code = "SEMIS_PIN_002"
+
+
+def refuse_unknown(
+    where: str, data: Mapping[object, object], known: Set[str], *, error: type[SemisError]
+) -> None:
+    """Refuse *data*, a mapping read at *where*, with *error* when it holds a key not in
+    *known*, naming every such key and listing the known ones."""
+    unknown = sorted(str(key) for key in set(data) - known)
+    if unknown:
+        raise error(
+            f"{where}: unknown key {', '.join(unknown)}",
+            resolution_hint=f"Known keys: {', '.join(sorted(known))}.",
+        )

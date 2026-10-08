@@ -1,5 +1,6 @@
 """The ``semis`` command: each subcommand delegates to the library and reports what it did."""
 
+import json
 import re
 from pathlib import Path
 
@@ -45,10 +46,10 @@ tables:
 """
 
 
-def _project(tmp_path: Path, **scenarios: str) -> Path:
-    """A project directory: semis.yaml, the TRINITY schema, and *scenarios* by file stem."""
+def _project(tmp_path: Path, *, ddl: str = TRINITY, **scenarios: str) -> Path:
+    """A project directory: semis.yaml, the *ddl* schema, and *scenarios* by file stem."""
     tmp_path.mkdir(exist_ok=True)
-    (tmp_path / "schema.sql").write_text(TRINITY)
+    (tmp_path / "schema.sql").write_text(ddl)
     (tmp_path / "scenarios").mkdir()
     for stem, text in scenarios.items():
         (tmp_path / "scenarios" / f"{stem}.yaml").write_text(text)
@@ -163,28 +164,29 @@ def test_seeds_writes_files_and_opens_no_connection(
         [
             "001_prep_seed.tb_continent.sql",
             "002_prep_seed.tb_country.sql",
-            "minimal_seed.facts.json",
-            "schema_pin.yaml",
         ],
     )
 
 
-def _invoke(tmp_path: Path, command: str, *args: str, scenario: str = SCENARIO) -> Result:
-    """*command* run on minimal_seed.yaml, holding *scenario*, in a fresh project."""
-    config = _project(tmp_path, minimal_seed=scenario)
+def _invoke(
+    tmp_path: Path, command: str, *args: str, scenario: str = SCENARIO, ddl: str = TRINITY
+) -> Result:
+    """*command* run on minimal_seed.yaml, holding *scenario*, in a fresh project on *ddl*."""
+    config = _project(tmp_path, ddl=ddl, minimal_seed=scenario)
     path = str(tmp_path / "scenarios" / "minimal_seed.yaml")
     return runner.invoke(app, [command, path, "-c", str(config), *args])
 
 
-def test_seeds_reports_each_file_and_the_pin(tmp_path: Path) -> None:
+def test_seeds_reports_each_file_and_writes_no_pin(tmp_path: Path) -> None:
+    """A run writes seeds only: the pin is semis pin's, beside the scenario."""
     out = tmp_path / "out"
     result = _invoke(tmp_path, "seeds", "-o", str(out))
     assert result.output == (
         "scenario minimal_seed is unpinned: its schema is not checked\n"
         "wrote 001_prep_seed.tb_continent.sql  2 rows\n"
         "wrote 002_prep_seed.tb_country.sql    4 rows\n"
-        f"wrote {out / 'schema_pin.yaml'}: copy it into the scenario to pin its schema\n"
     )
+    assert not (tmp_path / "scenarios" / "minimal_seed.pin.json").exists()
 
 
 def test_verbose_names_each_files_format_and_columns(tmp_path: Path) -> None:
@@ -254,6 +256,19 @@ def test_validate_refuses_a_scenario_the_schema_cannot_run(tmp_path: Path) -> No
     )
 
 
+def test_validate_names_a_key_it_leaves_null_before_a_value_column(tmp_path: Path) -> None:
+    """In column order; the hint says how each kind is given a value."""
+    ddl = TRINITY.replace(
+        "fk_continent BIGINT NOT NULL REFERENCES", "fk_continent BIGINT REFERENCES"
+    ).replace("iso_code CHAR(2) NOT NULL,", "iso_code CHAR(2) NOT NULL,\n    note TEXT,", 1)
+    countries = SCENARIO.replace("  - name: catalog.tb_continent\n    count: 2\n", "")
+    result = _invoke(tmp_path, "validate", scenario=countries, ddl=ddl)
+    assert result.output.splitlines()[1] == (
+        "catalog.tb_country leaves fk_continent, note NULL; "
+        "fill: draws the values, a parent under tables: points the keys"
+    )
+
+
 ONE_ROW = """\
 scenario_id: 0x5001
 name: one_row
@@ -276,39 +291,27 @@ def test_seeds_counts_one_row_in_the_singular(tmp_path: Path) -> None:
 
 
 def _moved(tmp_path: Path) -> Path:
-    """A project whose scenario is pinned, then its schema moved; its config path."""
-    first = _invoke(tmp_path / "first", "seeds", "-o", str(tmp_path / "first" / "out"))
-    assert first.exit_code == 0
-    pinned = SCENARIO + (tmp_path / "first" / "out" / "schema_pin.yaml").read_text()
-    config = _project(tmp_path / "moved", minimal_seed=pinned)
-    facts = tmp_path / "first" / "out" / "minimal_seed.facts.json"
-    (tmp_path / "moved" / "scenarios" / facts.name).write_text(facts.read_text())
-    schema = tmp_path / "moved" / "schema.sql"
+    """A project whose scenario is pinned by semis pin, then its schema moved; its config."""
+    config = _project(tmp_path, minimal_seed=SCENARIO)
+    pinned = runner.invoke(
+        app, ["pin", str(tmp_path / "scenarios" / "minimal_seed.yaml"), "-c", str(config)]
+    )
+    assert pinned.exit_code == 0
+    schema = tmp_path / "schema.sql"
     schema.write_text(TRINITY.replace("name VARCHAR(50) NOT NULL", "name VARCHAR(50)"))
     return config
 
 
-def _refused(config: Path, *args: str) -> str:
-    path = str(config.parent / "scenarios" / "minimal_seed.yaml")
-    result = runner.invoke(app, [*args[:1], path, "-c", str(config), *args[1:]])
-    assert result.exit_code == 1
-    return result.output.splitlines()[-1]
-
-
-def test_a_moved_pin_under_seeds_points_at_the_pin_the_run_wrote(tmp_path: Path) -> None:
+@pytest.mark.parametrize("args", [("validate",), ("seeds", "--dry-run"), ("seeds", "-o")], ids=str)
+def test_a_moved_pin_is_refused_naming_semis_pin(tmp_path: Path, args: tuple[str, ...]) -> None:
     config = _moved(tmp_path)
-    hint = _refused(config, "seeds", "-o", str(tmp_path / "out"))
-    assert "re-pin the scenario from the schema_pin.yaml this run wrote beside its seeds" in hint
-
-
-@pytest.mark.parametrize("args", [("validate",), ("seeds", "--dry-run")])
-def test_a_moved_pin_where_no_pin_is_kept_points_at_a_run_that_keeps_one(
-    tmp_path: Path, args: tuple[str, ...]
-) -> None:
-    hint = _refused(_moved(tmp_path), *args)
-    assert (
-        "re-pin the scenario from the schema_pin.yaml `semis seeds -o <dir>` or `semis apply` writes "
-        "beside its seeds" in hint
+    path = str(config.parent / "scenarios" / "minimal_seed.yaml")
+    output = [str(tmp_path / "out")] if args[-1] == "-o" else []
+    result = runner.invoke(app, [args[0], path, "-c", str(config), *args[1:], *output])
+    assert (result.exit_code, result.output.splitlines()[-1]) == (
+        1,
+        "Hint: Review the changes, then accept them with semis pin on the scenario, or pass "
+        "--no-pin for one run.",
     )
 
 
@@ -724,11 +727,11 @@ def _fragments(password: str) -> set[str]:
 
 
 @pytest.mark.parametrize(("url", "password"), PASSWORDS)
-@pytest.mark.parametrize("command", ["validate", "apply", "validate-seeds"])
+@pytest.mark.parametrize("command", ["validate", "pin", "apply", "reset", "validate-seeds"])
 def test_no_command_prints_any_part_of_a_password(
     tmp_path: Path, url: str, password: str, command: str
 ) -> None:
-    if command == "validate":
+    if command in {"validate", "pin"}:
         config = _live_project(tmp_path)
     else:
         config = _project(tmp_path, minimal_seed=SCENARIO)
@@ -785,3 +788,132 @@ def test_dry_run_says_what_it_does_for_each_command(command: str, said: str) -> 
     result = runner.invoke(app, [command, "--help"], env={"COLUMNS": "300"})
     shown = " ".join(_usage(result).replace("│", " ").split())
     assert f"--dry-run {said}" in shown
+
+
+def test_pin_writes_the_scenarios_pin_beside_it(tmp_path: Path) -> None:
+    """The digest is the one a run of the scenario computes, and the file keeps the
+    facts it was taken from."""
+    result = _invoke(tmp_path / "pinned", "pin")
+    pin = tmp_path / "pinned" / "scenarios" / "minimal_seed.pin.json"
+    written = json.loads(pin.read_text())
+    config = tmp_path / "pinned" / "semis.yaml"
+    validated = runner.invoke(
+        app, ["validate", str(pin.with_name("minimal_seed.yaml")), "-c", str(config)]
+    )
+    assert (result.exit_code, validated.exit_code) == (0, 0), result.output
+    assert validated.output.splitlines()[0] == (
+        f"scenario minimal_seed matches its schema pin (ddl {written['digest']})"
+    )
+    assert sorted(written) == ["confiture", "digest", "facts", "source", "taken"]
+    assert (
+        result.output
+        == f"wrote {pin}: scenario minimal_seed is pinned ({written['source']} {written['digest']})\n"
+    )
+
+
+def test_pin_leaves_an_unchanged_pin_as_it_was(tmp_path: Path) -> None:
+    """So its taken date does not churn: a second pin of the same schema writes nothing."""
+    _invoke(tmp_path, "pin")
+    pin = tmp_path / "scenarios" / "minimal_seed.pin.json"
+    before = (pin.read_bytes(), pin.stat().st_mtime_ns)
+    config = tmp_path / "semis.yaml"
+    again = runner.invoke(
+        app, ["pin", str(tmp_path / "scenarios" / "minimal_seed.yaml"), "-c", str(config)]
+    )
+    assert (again.exit_code, again.output) == (0, f"{pin} is unchanged\n")
+    assert (pin.read_bytes(), pin.stat().st_mtime_ns) == before
+
+
+def test_pin_on_a_moved_schema_rewrites_the_pin_and_says_what_moved(tmp_path: Path) -> None:
+    _invoke(tmp_path, "pin")
+    (tmp_path / "schema.sql").write_text(
+        TRINITY.replace("name VARCHAR(50) NOT NULL", "name VARCHAR(50)")
+    )
+    pin = tmp_path / "scenarios" / "minimal_seed.pin.json"
+    config = tmp_path / "semis.yaml"
+    moved = runner.invoke(
+        app, ["pin", str(tmp_path / "scenarios" / "minimal_seed.yaml"), "-c", str(config)]
+    )
+    digest = json.loads(pin.read_text())["digest"]
+    assert (moved.exit_code, moved.output.splitlines()) == (
+        0,
+        [
+            "What moved:",
+            "  catalog.tb_continent.name: not_null true → false",
+            f"wrote {pin}: scenario minimal_seed is pinned (ddl {digest})",
+        ],
+    )
+
+
+@pytest.mark.parametrize("corrupt", ["{not json", '{"digest": "sha256:0"}'], ids=["json", "keys"])
+def test_pin_replaces_a_pin_file_that_does_not_read(tmp_path: Path, corrupt: str) -> None:
+    """semis pin is the command that repairs a pin file, so no refusal of one stops it."""
+    config = _project(tmp_path, minimal_seed=SCENARIO)
+    pin = tmp_path / "scenarios" / "minimal_seed.pin.json"
+    pin.write_text(corrupt)
+    result = runner.invoke(
+        app, ["pin", str(tmp_path / "scenarios" / "minimal_seed.yaml"), "-c", str(config)]
+    )
+    assert (result.exit_code, sorted(json.loads(pin.read_text()))) == (
+        0,
+        ["confiture", "digest", "facts", "source", "taken"],
+    )
+
+
+def test_a_rehearsed_seeds_finding_names_its_file_relative_to_the_rehearsal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rehearsal's directory is gone by the time findings print: each file is named
+    as the seeds the run wrote, never by a temporary path."""
+    config = _seeds_project(tmp_path, monkeypatch)
+    (tmp_path / "schema" / "010_schema.sql").write_text(
+        TRINITY.replace(
+            "name VARCHAR(50) NOT NULL", "name VARCHAR(50) NOT NULL,\n    ref UUID"
+        ).replace("name VARCHAR(50)\n", "name VARCHAR(50),\n    ref UUID\n")
+    )
+    (tmp_path / "scenarios" / "minimal_seed.yaml").write_text(
+        SCENARIO.replace("count: 2\n", "count: 2\n    overrides: {ref: not-a-uuid}\n")
+    )
+    result = _validate_seeds(tmp_path, config)
+    found = [line for line in result.stdout.splitlines() if line.startswith("ERROR")]
+    assert found == [
+        "ERROR INVALID_UUID_FORMAT 001_prep_seed.tb_continent.sql:2",
+        "ERROR INVALID_UUID_FORMAT 001_prep_seed.tb_continent.sql:3",
+    ]
+
+
+def _pin_check(config: Path) -> Result:
+    path = str(config.parent / "scenarios" / "minimal_seed.yaml")
+    return runner.invoke(app, ["pin", path, "-c", str(config), "--check"])
+
+
+def test_pin_check_fails_on_a_moved_schema_and_writes_nothing(tmp_path: Path) -> None:
+    config = _moved(tmp_path)
+    pin = tmp_path / "scenarios" / "minimal_seed.pin.json"
+    before = pin.read_bytes()
+    result = _pin_check(config)
+    assert (result.exit_code, result.output.splitlines()) == (
+        1,
+        [
+            "What moved:",
+            "  catalog.tb_continent.name: not_null true → false",
+            f"{pin} would change: run semis pin on the scenario to accept it",
+        ],
+    )
+    assert pin.read_bytes() == before
+
+
+def test_pin_check_passes_on_an_unchanged_pin(tmp_path: Path) -> None:
+    config = _project(tmp_path, minimal_seed=SCENARIO)
+    runner.invoke(
+        app, ["pin", str(tmp_path / "scenarios" / "minimal_seed.yaml"), "-c", str(config)]
+    )
+    result = _pin_check(config)
+    pin = tmp_path / "scenarios" / "minimal_seed.pin.json"
+    assert (result.exit_code, result.output) == (0, f"{pin} is unchanged\n")
+
+
+def test_pin_check_fails_on_an_unpinned_scenario_and_writes_no_pin(tmp_path: Path) -> None:
+    result = _pin_check(_project(tmp_path, minimal_seed=SCENARIO))
+    pin = tmp_path / "scenarios" / "minimal_seed.pin.json"
+    assert (result.exit_code, pin.exists()) == (1, False)

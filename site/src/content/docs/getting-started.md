@@ -149,7 +149,6 @@ semis seeds scenarios/continents.yaml -o db/seeds
 scenario continents is unpinned: its schema is not checked
 wrote 001_prep_seed.tb_continent.sql  7 rows
 wrote 002_prep_seed.tb_country.sql    21 rows
-wrote db/seeds/schema_pin.yaml: copy it into the scenario to pin its schema
 ```
 
 `semis seeds` reaches no database. Each file is an `INSERT` into the staging twin:
@@ -179,7 +178,6 @@ semis apply scenarios/continents.yaml -o db/seeds --database-url postgresql:///c
 scenario continents is unpinned: its schema is not checked
 applied 001_prep_seed.tb_continent.sql  7 rows
 applied 002_prep_seed.tb_country.sql    21 rows
-wrote db/seeds/schema_pin.yaml: copy it into the scenario to pin its schema
 committed
 ```
 
@@ -223,13 +221,20 @@ sequence     3
 
 ## Pin the scenario to its schema
 
-The run wrote `schema_pin.yaml` beside the seeds: a digest of the facts semis read, and
-the facts themselves, `continents.facts.json`. Copy the facts beside the scenario, and
-paste the block into it:
+`semis pin` takes a digest of the facts semis reads, and writes it, with the facts
+themselves, to `continents.pin.json` beside the scenario:
 
 ```bash
-cp db/seeds/continents.facts.json scenarios/
-cat db/seeds/schema_pin.yaml >> scenarios/continents.yaml
+semis pin scenarios/continents.yaml
+```
+
+```text
+wrote scenarios/continents.pin.json: scenario continents is pinned (ddl sha256:be7c152ffa4c2ca5da8691e3549b1b5fa2d4a403482bb26ad0236016b41f65aa)
+```
+
+Commit it beside the scenario. A run now checks the schema against it:
+
+```bash
 semis validate scenarios/continents.yaml
 ```
 
@@ -286,7 +291,6 @@ semis apply scenarios/countries.yaml -o db/seeds/countries --database-url postgr
 scenario countries is unpinned: its schema is not checked
 applied 001_catalog.tb_continent.sql  3 rows
 applied 002_catalog.tb_country.sql    6 rows
-wrote db/seeds/countries/schema_pin.yaml: copy it into the scenario to pin its schema
 committed
 ```
 

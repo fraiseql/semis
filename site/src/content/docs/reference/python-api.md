@@ -90,10 +90,12 @@ the caller's transaction.
 
 ```python
 ScenarioManager(facts, *, providers=None, libraries=(), staging=None)
-ScenarioManager.load(path)
+ScenarioManager.load(path, *, read_pin=True)
 ScenarioManager.execute(scenario, out_dir, *, connection=None, format=None, no_pin=False)
-ScenarioManager.apply(scenario, out_dir, *, connection, format=None, no_pin=False)
+ScenarioManager.apply(scenario, out_dir=None, *, connection, format=None, no_pin=False)
 ScenarioManager.rehearse(scenario, *, connection=None, format=None, no_pin=False)
+ScenarioManager.reset(scenario, *, connection)
+ScenarioManager.pin(scenario, path, *, check=False)
 ScenarioManager.check(scenario, *, no_pin=False)
 ScenarioManager.validate(scenario, *, schema_dir, max_level=3, connection=None, catalog_schema=None, format=None, no_pin=False)
 ScenarioManager.validate_seeds(seeds_dir, *, schema_dir, max_level=3, connection=None, catalog_schema=None)
@@ -102,18 +104,33 @@ ScenarioManager.validate_seeds(seeds_dir, *, schema_dir, max_level=3, connection
 `ScenarioManager` loads scenarios against one schema, with a project's own `providers`,
 a mapping of names to providers, and its enabled `libraries`; a prep-seed scenario writes
 into `staging`'s twins. `load` reads a scenario file, refusing a malformed one with
-`ScenarioError`.
+`ScenarioError`, and the pin `<name>.pin.json` beside it keeps, when there is one, as
+the scenario's `pin`; with `read_pin=False` it loads it unpinned, whatever that file
+holds.
 
-- `execute` runs the scenario in its declared mode, writing one seed file per table, and
-  the pin, to `out_dir`. A read-back scenario needs the `connection` its run applies on,
+- `execute` runs the scenario in its declared mode, writing one seed file per table to
+  `out_dir`. A read-back scenario needs the `connection` its run applies on,
   whose transaction stays the caller's; prep-seed takes none.
 - `apply` runs it and applies its seeds on `connection`, in the caller's transaction:
   read-back applies each table as it is written, prep-seed writes every file and then
   applies them. A database that already holds the scenario's rows is refused before
-  anything is written, with `AlreadyAppliedError`, naming the reset.
+  anything is written, with `AlreadyAppliedError`, naming the reset. Without `out_dir`,
+  the files are written to a directory deleted before it returns.
 - `rehearse` runs it into a directory deleted before it returns: every row generated and
   checked, every file written, then discarded. Given a `connection`, the seeds are also
   applied, as `apply` does, and the caller rolls back.
+- `reset` deletes the rows the scenario wrote, and only those, on `connection`, in the
+  caller's transaction: each table the run writes into, and in prep-seed each staging
+  twin, by the scenario's UUID range on its `id`, children first, and restarts the
+  identity of a table it empties. It returns a `Deleted(table, rows, kept, restarted)`
+  per table: the rows deleted, the other rows it still holds, and whether its identity
+  was restarted, `None` for a table with none. A row the scenario did not write
+  pointing at one it did is refused with `ResetBlockedError`. A table with no uuid `id` is refused with `ResetScopeError`.
+- `pin` takes the scenario's schema pin from this schema into `<name>.pin.json` beside
+  the scenario file at `path`, as `semis pin` does, and returns a `PinChange`: the `path`,
+  the schema's `pin`, the `previous` one the file kept, what `changes` moved between
+  them, whether the pin `changed`, and whether the file was `written`. An unchanged pin
+  writes nothing, and with `check=True` nothing is written at all.
 - `check` refuses what can be refused before a row is drawn: providers, the pin, the
   schema, each foreign key's parent and each hierarchy. It returns what the pin check did,
   then a line per table that leaves nullable columns `NULL`.
@@ -121,26 +138,29 @@ into `staging`'s twins. `load` reads a scenario file, refusing a malformed one w
   levels 1 to `max_level`; `validate_seeds` judges a directory's. Levels 4 and 5 load the
   seeds on `connection`, in a savepoint confiture rolls back.
 
-`execute`, `apply` and `rehearse` return a `Run`: its `seeds`, its `pin` and `pin_path`,
-and its `notices`, the lines a run says, as `check` returns them. `validate` returns a
-`Validation`: the `run` and confiture's `report`.
+`execute`, `apply` and `rehearse` return a `Run`: its `seeds`, the `pin` of the schema it
+read, which it writes nowhere, and its `notices`, the lines a run says, as `check`
+returns them. `validate` returns a `Validation`: the `run`, confiture's `report`, and the
+`seeds_dir` the rehearsal wrote to, deleted since, which a finding's path is relative to.
 
 `semis apply` holds `readback.exclusive(database_url, scenario.id)` around its
 transaction: an advisory lock on a connection of its own, so a second apply of one
 scenario waits for the first, then finds its rows. `ScenarioManager` takes no lock on a
-connection it is given; a caller applying on its own connection while another may apply
-the same scenario holds `exclusive` around its transaction too.
+connection it is given; a caller applying or resetting on its own connection while
+another may apply the same scenario holds `exclusive` around its transaction too, as
+`semis reset` does.
 
 ```python
-Scenario(id, name, mode, tables, locale='en_US', seed=None, description='', schema_pin=None, existing=())
+Scenario(id, name, mode, tables, locale='en_US', seed=None, description='', pin=None, existing=())
 ExistingTable(name, identifiers=None)
 Scenario.for_run(*, scenario_id=None, seed=None, locale=None)
 ```
 
 A scenario built in Python is refused as a loaded one is. `tables` is a tuple of
 `TableSpec(name, count, …)`, each schema-qualified table with its `overrides`,
-`providers`, `fill`, `trusts_trigger` and `hierarchy`, as [the scenario
-file](/reference/scenario-file/) names them. `existing` is a tuple of `ExistingTable`, the
+`providers`, `fill`, `trusts_trigger`, `hierarchy` and `copies`, as [the scenario
+file](/reference/scenario-file/) names them; `copies` maps a column to a
+`Copied(key, column)`, the foreign key and the parent column it copies. `existing` is a tuple of `ExistingTable`, the
 tables a read-back run takes parents from without writing them: every row, or those whose
 `identifier` is one of `identifiers`, in that order. `for_run` returns the scenario with
 one run's overrides, and a line saying each.

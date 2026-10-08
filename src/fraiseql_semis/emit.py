@@ -9,7 +9,7 @@ from itertools import groupby
 from pathlib import Path
 
 from fraiseql_semis import readback, seeds
-from fraiseql_semis.generator import FakeDataGenerator, Fill, Override, Row
+from fraiseql_semis.generator import Copied, FakeDataGenerator, Fill, Override, Row
 from fraiseql_semis.hierarchy import Hierarchy, Paths, refuse_path_in_prep_seed
 from fraiseql_semis.resolution import (
     EXISTING_BY,
@@ -30,6 +30,7 @@ def prep_seed(  # noqa: PLR0913 — three positionals; how each table is drawn b
     overrides: Mapping[str, Mapping[str, Override]] | None = None,
     fill: Mapping[str, Fill] | None = None,
     hierarchies: Mapping[str, Hierarchy] | None = None,
+    copies: Mapping[str, Mapping[str, Copied]] | None = None,
     format: seeds.Format | None = None,
     staging: Staging | None = None,
 ) -> list[SeedFile]:
@@ -51,6 +52,7 @@ def prep_seed(  # noqa: PLR0913 — three positionals; how each table is drawn b
         overrides=overrides,
         fill=fill,
         hierarchies=hierarchies,
+        copies=copies,
         resolver=resolver,
     )
     by_table = groupby(walk, key=lambda batch: batch[0].ref.display)
@@ -81,6 +83,7 @@ def read_back(  # noqa: PLR0913 — four positionals; how each table is drawn by
     overrides: Mapping[str, Mapping[str, Override]] | None = None,
     fill: Mapping[str, Fill] | None = None,
     hierarchies: Mapping[str, Hierarchy] | None = None,
+    copies: Mapping[str, Mapping[str, Copied]] | None = None,
     format: seeds.Format | None = None,
     existing: Mapping[str, Sequence[str] | None] | None = None,
 ) -> list[SeedFile]:
@@ -109,6 +112,7 @@ def read_back(  # noqa: PLR0913 — four positionals; how each table is drawn by
         overrides=overrides,
         fill=fill,
         hierarchies=hierarchies,
+        copies=copies,
         resolver=resolver,
         existing=frozenset(existing or {}),
     )

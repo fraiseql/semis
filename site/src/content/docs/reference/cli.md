@@ -37,8 +37,8 @@ whatever a refusal prints.
 ## semis seeds
 
 `semis seeds [OPTIONS] SCENARIO` writes a prep-seed scenario's seed files, one per table,
-with `schema_pin.yaml` and `<scenario>.facts.json` beside them. No database is reached. A
-read-back scenario is refused: its seeds are applied as they are written.
+and nothing else: a scenario's pin is [`semis pin`](#semis-pin)'s. No database is
+reached. A read-back scenario is refused: its seeds are applied as they are written.
 
 | Argument or option | Takes | Description |
 |---|---|---|
@@ -62,6 +62,10 @@ them in order, into the staging twins. A read-back scenario applies each table a
 written, and learns its keys before the next. With `--dry-run`, the whole run is applied
 and rolled back.
 
+The seed files are kept in `--output` when it is given. Without it, they are written to a
+directory deleted before the command returns, so nothing is left on disk, and each line
+names the table it applied, `applied catalog.tb_country  6 rows`, rather than a file.
+
 A second apply of the same scenario waits for the first: each holds an advisory lock on
 the scenario's id until its transaction ends. Once the first commits, the second is
 refused as already applied; once it rolls back, the second proceeds.
@@ -70,24 +74,66 @@ A scenario applies once, to a reset database. When a table the run writes into, 
 prep-seed its staging twin, already holds a row carrying the scenario's id, `apply` is
 refused before anything is written (the check skips a table with no `id` column, or whose
 `id` is not a uuid), `--dry-run` included, with `AlreadyAppliedError`: the
-message names the first table found, and the hint the `TRUNCATE … RESTART IDENTITY`
-that resets every table of the run, each name quoted. It has no `CASCADE`: PostgreSQL
-refuses it when a table outside the run has a foreign key into one of them. See
+message names the first table found, and the hint `semis apply --reset` and
+[`semis reset`](#semis-reset). See
 [Determinism](/concepts/determinism/#a-scenario-applies-once).
+
+With `--reset`, the scenario's rows are deleted first, as `semis reset` deletes them, and
+the scenario applied, in the same transaction and under the same lock: a failed apply
+leaves the first run's rows in place, and on a database that holds none of them it is
+`apply`. Each table's reset line is printed before the apply's.
 
 | Argument or option | Takes | Description |
 |---|---|---|
 | `SCENARIO` | a file | The scenario's YAML file. Required. |
-| `--output`, `-o` | a directory | The directory the seed files are written to. Required, except with `--dry-run`. |
+| `--output`, `-o` | a directory | The directory the seed files are kept in. Default: none, and no file is kept. |
 | `--config`, `-c` | a file | The project file. Default: `./semis.yaml`. |
 | `--database-url`, `-d` | a URL | The database to apply to. See [the database URL](#the-database-url). |
 | `--format` | `insert` or `copy` | The writer. Default: the mode's own, `insert` for prep-seed, `copy` for read-back. |
 | `--dry-run` | | Apply every row, then roll back: nothing is kept. |
+| `--reset` | | Delete the scenario's rows first, in the same transaction: a failed apply keeps them. |
 | `--no-pin` | | Skip the schema pin check for this run, and say so. |
 | `--verbose`, `-v` | | Name each seed file's format and columns. |
 | `--scenario-id` | hex, `0x5001` | The scenario id the UUIDs carry, for this run. |
 | `--seed` | an integer | The Faker seed, for this run. |
 | `--locale` | a locale | The Faker locale, for this run. |
+
+## semis reset
+
+`semis reset [OPTIONS] SCENARIO` deletes the rows a scenario wrote, and only those, in one
+transaction committed at the end: the rows of each table the run writes into, and in
+prep-seed of each staging twin, whose `id` lies in the scenario's UUID range, as the
+already-applied check reads it. Children go before parents. A table the run does not
+write, an `existing:` one among them, is never touched, and neither is a row another
+tool or scenario wrote. A table the reset leaves empty has its identity restarted, so a
+table the scenario owns alone applies again exactly as it first did, keys and seed files
+alike; a table that keeps other rows keeps its sequence. One line per table says how many
+rows went, how many other rows it kept, and whether its identity was restarted:
+
+```text
+deleted 6 rows from shop.tb_order; identity restarted
+deleted 2 rows from shop.tb_customer; 3 other rows kept, identity not restarted
+committed
+```
+
+A serial column's sequence is not restarted, only an identity column's. It holds the scenario's advisory lock, as `apply` does. With `--dry-run`,
+the rows are deleted and the transaction rolled back.
+
+Nothing outside the scenario may point at its rows. Before a row is deleted, every
+foreign key into the run's tables is asked, from any schema and whatever its
+`ON DELETE`, whether a row the scenario did not write points at one it did: a row of a
+table outside the run, or one another tool wrote into a run table. One does, and the
+reset is refused with `ResetBlockedError`, naming that row's table, the key and how many
+rows, and nothing is deleted. So no `CASCADE` or `SET NULL` ever reaches a row semis did
+not write. The referencing tables are locked `SHARE` until the transaction ends, so no
+row starts pointing in meanwhile.
+
+| Argument or option | Takes | Description |
+|---|---|---|
+| `SCENARIO` | a file | The scenario's YAML file. Required. |
+| `--config`, `-c` | a file | The project file. Default: `./semis.yaml`. |
+| `--database-url`, `-d` | a URL | The database to reset. See [the database URL](#the-database-url). |
+| `--dry-run` | | Delete the scenario's rows, then roll back: nothing is lost. |
 
 ## semis generate
 
@@ -143,6 +189,27 @@ prep-seed each staging twin exists.
 | `--database-url`, `-d` | a URL | The database a `database:` schema is read from. |
 | `--no-pin` | | Skip the schema pin check, and say so. |
 
+## semis pin
+
+`semis pin [OPTIONS] SCENARIO` takes the scenario's schema pin from the project's
+schema, and writes it to `<name>.pin.json` beside the scenario file: the digest, how the
+schema was read, and the facts the digest was taken from. When the file already keeps
+that pin, it says the file is unchanged and writes nothing, so its date does not churn.
+When the schema moved, it prints what moved, as a refused run names it, then rewrites
+the file. A pin file that does not read is replaced. The scenario file itself is never
+written. See [Schema pins](/concepts/schema-pins/).
+
+With `--check`, nothing is written: it exits 1 when the file would change, the schema
+having moved or the scenario never been pinned, saying what moved, and 0 when it would
+not. A CI job runs it to fail on a pin nobody accepted.
+
+| Argument or option | Takes | Description |
+|---|---|---|
+| `SCENARIO` | a file | The scenario's YAML file. Required. |
+| `--config`, `-c` | a file | The project file. Default: `./semis.yaml`. |
+| `--database-url`, `-d` | a URL | The database a `database:` schema is read from. See [the database URL](#the-database-url). |
+| `--check` | | Write nothing; exit 1 if the pin would change, for CI. |
+
 ## semis validate-seeds
 
 `semis validate-seeds [OPTIONS] [SCENARIO]` judges prep-seed seeds at confiture's five
@@ -164,9 +231,9 @@ an `ERROR` exits 1. See [Validating seeds](/guides/validating-seeds/).
 
 `semis list-scenarios [OPTIONS]` lists the scenario files under the project's `scenarios:`
 directory: id, mode, name and file, by id. Two files that use one id are named on stderr,
-and the command exits 1. A `schema_pin.yaml` or `<scenario>.facts.json` a run wrote there
-is not listed; any other YAML file that is not a scenario, or a scenario whose `name` or
-`scenario_id` is malformed, is refused naming the file.
+and the command exits 1. A scenario's `<name>.pin.json` is not listed; a YAML file that is
+not a scenario, or a scenario whose `name` or `scenario_id` is malformed, is refused naming
+the file.
 
 | Argument or option | Takes | Description |
 |---|---|---|

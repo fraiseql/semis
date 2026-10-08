@@ -5,7 +5,7 @@ parsed — and never from a column's name. Pure: facts, the parents' rows and th
 learned keys in, values out; no database and no file system.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Protocol, override
 
 from fraiseql_semis.errors import ResolutionError
@@ -26,6 +26,10 @@ class Resolver(Protocol):
         """The value that points *table*'s FK *column* at its parent's *row*-th row."""
         ...
 
+    def pointed_at(self, column: ColumnFacts, *, table: str) -> int:
+        """The parent row, 0-based, the last ``value_for`` pointed *table*'s FK *column* at."""
+        ...
+
 
 def natural_ids(table: TableFacts, rows: Sequence[Mapping[str, object]]) -> list[object]:
     """The natural id of each of *table*'s *rows*, in order; none when it has no natural id."""
@@ -40,6 +44,7 @@ class _RoundRobin:
     def __init__(self) -> None:
         self._parents: dict[str, tuple[TableFacts | TableKeys, list[object]]] = {}
         self._next: dict[tuple[str, str], int] = {}
+        self._last: dict[tuple[str, str], int] = {}
         # Tables whose keys were read, not learned from rows: no natural id is needed.
         self._read: set[str] = set()
 
@@ -52,7 +57,11 @@ class _RoundRobin:
         values = self._values(column, table)
         turn = self._next.get((table, column.name), 0)
         self._next[(table, column.name)] = turn + 1
-        return values[turn % len(values)]
+        row = self._last[table, column.name] = turn % len(values)
+        return values[row]
+
+    def pointed_at(self, column: ColumnFacts, *, table: str) -> int:
+        return self._last[table, column.name]
 
     def value_at(self, column: ColumnFacts, *, table: str, row: int) -> object:
         values = self._values(column, table)
@@ -148,28 +157,48 @@ class ReadBackResolver(_RoundRobin):
 
 
 def require_parents(
-    table: TableFacts,
-    counts: Mapping[str, int],
-    *,
-    left_null: frozenset[str] = frozenset(),
-    existing: frozenset[str] = frozenset(),
+    table: TableFacts, counts: Mapping[str, int], *, existing: frozenset[str] = frozenset()
 ) -> None:
-    """Refuse *table* when a foreign key's parent draws no rows in a run of *counts*.
+    """Refuse *table* when a NOT NULL foreign key's parent draws no rows in a run of *counts*.
 
     The draw refuses the same column the same way; this says so before a row is drawn.
-    A self-reference is a hierarchy's to judge, a key in *left_null* needs no parent, and
-    a parent in *existing* has its rows in the database already.
+    A nullable key so placed is ``unparented``: written ``NULL``, never refused.
+    """
+    for column in _without_parent(table, counts, existing):
+        if column.not_null:
+            raise _no_rows(column, table.ref.display, _parent_of(column, table.ref.display))
+
+
+def unparented(
+    table: TableFacts, counts: Mapping[str, int], *, existing: frozenset[str] = frozenset()
+) -> frozenset[str]:
+    """*table*'s nullable foreign keys whose parent draws no rows in a run of *counts*:
+    the run can only write them ``NULL``, and says so (D38). A key with a default is left
+    to PostgreSQL."""
+    return frozenset(
+        column.name
+        for column in _without_parent(table, counts, existing)
+        if not column.not_null and column.default is None
+    )
+
+
+def _without_parent(
+    table: TableFacts, counts: Mapping[str, int], existing: frozenset[str]
+) -> Iterator[ColumnFacts]:
+    """*table*'s foreign keys to another table with no rows in a run of *counts*.
+
+    A self-reference is a hierarchy's to judge, and a parent in *existing* has its rows
+    in the database already.
     """
     for column in table.columns:
         parent = column.foreign_key.table if column.foreign_key is not None else None
         if (
             parent is not None
             and parent != table.ref
-            and column.name not in left_null
             and parent.display not in existing
             and counts.get(parent.display, 0) < 1
         ):
-            raise _no_rows(column, table.ref.display, parent)
+            yield column
 
 
 def _parent_of(column: ColumnFacts, table: str) -> ObjectRef:

@@ -1,11 +1,10 @@
 """Learning a parent's ``pk_*`` after its seed is applied (read-back mode, ARCHITECTURE §5).
 
-The one module that imports ``psycopg``, and the only SQL semis writes (D9). That SQL is
-five shapes — taking a scenario's lock, asking whether its rows are already applied,
+The one module that imports ``psycopg``, and the only SQL semis writes (D9): taking a
+scenario's lock, asking whether its rows are already applied, deleting them for a reset,
 reading the keys of rows a run did not write, learning keys, and setting a hierarchy's
-paths from them; their identifiers come from the model, composed with
-``psycopg.sql.Identifier``, and their values are parameters. The reset a refused
-re-apply names is SQL too, written here for the reader to run, never run by semis.
+paths from them. Their identifiers come from the model, composed with
+``psycopg.sql.Identifier``, and their values are parameters.
 """
 
 from collections.abc import Iterator, Mapping, Sequence
@@ -16,7 +15,7 @@ from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 
 from fraiseql_semis.errors import ResolutionError, SchemaNotBuiltError, UnreachableDatabaseError
-from fraiseql_semis.schema import Connection, ObjectRef, TableFacts, TableKeys
+from fraiseql_semis.schema import Connection, ObjectRef, Reference, TableFacts, TableKeys
 
 SEMIS_LOCK_CLASS = 0x5E3115
 """semis' advisory-lock class: the first of the two ``int4`` keys of every lock it takes,
@@ -24,6 +23,15 @@ so its keys cannot meet another application's single-``bigint`` ones (ARCHITECTU
 
 _LOCK = sql.SQL("SELECT pg_advisory_xact_lock(%s, %s)")
 _HOLDS = sql.SQL("SELECT EXISTS (SELECT FROM {schema}.{table} WHERE {id} BETWEEN %s AND %s)")
+_DELETE = sql.SQL("DELETE FROM {schema}.{table} WHERE {id} BETWEEN %s AND %s")
+_COUNT = sql.SQL("SELECT count(*) FROM {schema}.{table}")
+_LOCK_SHARED = sql.SQL("LOCK TABLE {tables} IN SHARE MODE")
+_POINTING = sql.SQL(
+    "SELECT count(*) FROM {schema}.{table} AS r WHERE EXISTS (SELECT FROM {target_schema}."
+    "{target} AS t WHERE {joined} AND t.{id} BETWEEN %s AND %s)"
+)
+_NOT_OWN = sql.SQL(" AND (r.{own} BETWEEN %s AND %s) IS NOT TRUE")
+_RESTART = sql.SQL("ALTER TABLE {schema}.{table} {restarts}")
 _EVERY_KEY = sql.SQL("SELECT {pk} FROM {schema}.{table} ORDER BY {pk}")
 _KEYS_BY = sql.SQL("SELECT {by}, {pk} FROM {schema}.{table} WHERE {by} = ANY(%s)")
 _LEARN = sql.SQL("SELECT {pk}, {id} FROM {schema}.{table} WHERE {id} = ANY(%s)")
@@ -123,6 +131,80 @@ def holds(
     return bool(row and row[0])
 
 
+def delete_range(
+    connection: Connection, table: ObjectRef, natural_id: str, bounds: tuple[object, object]
+) -> int:
+    """Delete *table*'s rows whose *natural_id* lies within *bounds*, in *connection*'s
+    transaction: how many there were."""
+    query = _DELETE.format(
+        schema=sql.Identifier(table.schema),
+        table=sql.Identifier(table.name),
+        id=sql.Identifier(natural_id),
+    )
+    with _built(table):
+        return connection.execute(query, list(bounds)).rowcount
+
+
+def lock_shared(connection: Connection, tables: Sequence[ObjectRef]) -> None:
+    """Lock *tables* ``SHARE`` until *connection*'s transaction ends: their rows may be
+    read, and none written, so none starts pointing at a row a reset deletes."""
+    if tables:
+        names = sql.SQL(", ").join(sql.Identifier(table.schema, table.name) for table in tables)
+        connection.execute(_LOCK_SHARED.format(tables=names))
+
+
+def pointing(
+    connection: Connection,
+    reference: Reference,
+    *,
+    natural_id: str,
+    bounds: tuple[object, object],
+    own: tuple[str, tuple[object, object]] | None,
+) -> int:
+    """How many rows of *reference*'s table point, by it, at a row of its target whose
+    *natural_id* lies within *bounds*: every such row, or, when *own* gives the
+    referencing table's natural id and range, those outside that range."""
+    query = _POINTING.format(
+        schema=sql.Identifier(reference.table.schema),
+        table=sql.Identifier(reference.table.name),
+        target_schema=sql.Identifier(reference.target.schema),
+        target=sql.Identifier(reference.target.name),
+        joined=sql.SQL(" AND ").join(
+            sql.SQL("t.{} = r.{}").format(sql.Identifier(to), sql.Identifier(by))
+            for by, to in zip(reference.columns, reference.target_columns, strict=True)
+        ),
+        id=sql.Identifier(natural_id),
+    )
+    params = list(bounds)
+    if own is not None:
+        query += _NOT_OWN.format(own=sql.Identifier(own[0]))
+        params += list(own[1])
+    (rows,) = connection.execute(query, params).fetchone()
+    return rows
+
+
+def restart(connection: Connection, table: ObjectRef, identities: Sequence[str]) -> None:
+    """Restart each of *table*'s *identities*, in *connection*'s transaction: the keys
+    its next rows take begin again, as ``TRUNCATE … RESTART IDENTITY`` makes them."""
+    restarts = sql.SQL(", ").join(
+        sql.SQL("ALTER COLUMN {} RESTART").format(sql.Identifier(column)) for column in identities
+    )
+    connection.execute(
+        _RESTART.format(
+            schema=sql.Identifier(table.schema),
+            table=sql.Identifier(table.name),
+            restarts=restarts,
+        )
+    )
+
+
+def count(connection: Connection, table: ObjectRef) -> int:
+    """How many rows *table* holds, as *connection* sees it."""
+    query = _COUNT.format(schema=sql.Identifier(table.schema), table=sql.Identifier(table.name))
+    (rows,) = connection.execute(query).fetchone()
+    return rows
+
+
 def existing_keys(
     connection: Connection, table: TableKeys, *, by: str, values: Sequence[str] | None
 ) -> list[int]:
@@ -171,18 +253,6 @@ def _built(table: ObjectRef) -> Iterator[None]:
             f"the database holds no {table.display}",
             resolution_hint="Build the schema in this database, then apply the scenario.",
         ) from error
-
-
-def reset(tables: Sequence[ObjectRef]) -> str:
-    """The statement that empties *tables* and restarts their identities, for a reader to
-    run before a scenario is applied again.
-
-    Every name is quoted, so a reserved word, a dot or a capital reads back as the table
-    it names. There is no ``CASCADE``: PostgreSQL refuses to empty a table another table
-    outside *tables* references, and the reader decides whether that table's rows go.
-    """
-    names = sql.SQL(", ").join(sql.Identifier(table.schema, table.name) for table in tables)
-    return sql.SQL("TRUNCATE {} RESTART IDENTITY").format(names).as_string()
 
 
 def learn(connection: Connection, table: TableFacts, uuids: Sequence[object]) -> dict[object, int]:

@@ -5,7 +5,7 @@ confiture types semis passes around are re-exported here, so the rest of the pac
 imports them from ``fraiseql_semis.schema`` and a rename in confiture lands in one file.
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
@@ -42,8 +42,10 @@ __all__ = [
     "ConfiturError",
     "Connection",
     "DependencyCycleError",
+    "LiveSchema",
     "NotInModelError",
     "ObjectRef",
+    "Reference",
     "SchemaFacts",
     "SchemaModel",
     "SchemaSource",
@@ -101,6 +103,9 @@ class SchemaFacts:
         self._codes = table_codes
         self._source_kind: SourceKind = source_kind
         self._refs = {ref.display: ref for ref in model.tables}
+        # Each table's facts, read from the model once: a run asks for them many times.
+        self._tables: dict[str, TableFacts] = {}
+        self._columns: dict[str, tuple[ColumnFacts, ...]] = {}
 
     @classmethod
     def from_source(cls, source: SchemaSource, *, table_codes: TableCodes) -> SchemaFacts:
@@ -147,18 +152,18 @@ class SchemaFacts:
         *table* is schema-qualified. A table the model does not hold raises confiture's
         ``NotInModelError``; one without a code raises ``CodeRegistryError``.
         """
-        hints = naming_hints(self._model, table)
-        table_code = self._codes.code_for(table)
-        return TableFacts(
-            ref=self._refs[table],
-            table_code=table_code,
-            surrogate_pk=hints.surrogate_pk,
-            natural_id=hints.natural_id,
-            columns=tuple(
-                column_facts(self._model, table, column.name)
-                for column in writable_columns(self._model, table)
-            ),
-        )
+        found = self._tables.get(table)
+        if found is None:
+            hints = naming_hints(self._model, table)
+            table_code = self._codes.code_for(table)
+            found = self._tables[table] = TableFacts(
+                ref=self._refs[table],
+                table_code=table_code,
+                surrogate_pk=hints.surrogate_pk,
+                natural_id=hints.natural_id,
+                columns=self._writable(table),
+            )
+        return found
 
     def columns(self, table: str) -> tuple[ColumnFacts, ...] | None:
         """*table*'s writable columns with their facts; ``None`` when the model lacks it.
@@ -167,14 +172,73 @@ class SchemaFacts:
         """
         if table not in self._refs:
             return None
-        return tuple(
-            column_facts(self._model, table, column.name)
-            for column in writable_columns(self._model, table)
-        )
+        return self._writable(table)
+
+    def _writable(self, table: str) -> tuple[ColumnFacts, ...]:
+        found = self._columns.get(table)
+        if found is None:
+            found = self._columns[table] = tuple(
+                column_facts(self._model, table, column.name)
+                for column in writable_columns(self._model, table)
+            )
+        return found
 
     def insert_order(self, tables: Iterable[str] | None = None) -> list[ObjectRef]:
         """Parents before children, from the real foreign keys."""
         return dependency_order(self._model, tables=tables)
+
+
+@dataclass(frozen=True)
+class Reference:
+    """A foreign key, *constraint*: *table*'s *columns* pointing at *target*'s
+    *target_columns*."""
+
+    table: ObjectRef
+    constraint: str
+    columns: tuple[str, ...]
+    target: ObjectRef
+    target_columns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LiveSchema:
+    """What a reset reads of the database itself: confiture's model of every schema
+    in it, read once, in the caller's transaction."""
+
+    model: SchemaModel
+
+    @classmethod
+    def read(cls, connection: Connection) -> LiveSchema:
+        return cls(introspect(connection))
+
+    def references_into(self, tables: Collection[ObjectRef]) -> list[Reference]:
+        """Every foreign key into one of *tables*, from a table in any schema: a key from
+        a table semis never reads is seen too. In the order of the referencing tables'
+        names. A live model names the referenced columns even where the DDL named none
+        (``tests/contract/test_introspect_names_every_referencing_key.py``)."""
+        wanted: dict[tuple[str, str], ObjectRef] = {(t.schema, t.name): t for t in tables}
+        references: list[Reference] = []
+        for ref, table in sorted(self.model.tables.items(), key=lambda item: item[0].display):
+            for constraint in table.constraints:
+                target = constraint.ref_table
+                into = None if target is None else wanted.get((target.schema or "", target.name))
+                if into is None:
+                    continue
+                references.append(
+                    Reference(
+                        ref, constraint.name, constraint.columns, into, constraint.ref_columns
+                    )
+                )
+        return references
+
+    def identities(self, table: ObjectRef) -> tuple[str, ...]:
+        """*table*'s identity columns, whose sequences a reset restarts once it is empty."""
+        found = next(
+            (found for ref, found in self.model.tables.items() if ref.display == table.display),
+            None,
+        )
+        columns = found.columns if found is not None else ()
+        return tuple(column.name for column in columns if column.identity is not None)
 
 
 def database_url(

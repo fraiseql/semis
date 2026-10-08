@@ -42,7 +42,6 @@ scenario continents runs with seed 7, not 42, for this run
 scenario continents is unpinned: its schema is not checked
 wrote 001_prep_seed.tb_continent.sql  7 rows
 wrote 002_prep_seed.tb_country.sql    21 rows
-wrote run-3/schema_pin.yaml: copy it into the scenario to pin its schema
 ```
 
 ## Read-back is reproducible except the keys
@@ -57,8 +56,9 @@ after TRUNCATE, re-run -> fk targets: [3, 4]
 ```
 
 A plain `TRUNCATE` does not reset an identity sequence. `TRUNCATE … RESTART IDENTITY`
-does, and a project that restarts its identities gets byte-identical read-back output.
-The shape is identical either way: the same children point at the same parents, because
+does, and so does [`semis reset`](/reference/cli/#semis-reset) on a table it leaves
+empty: a table the scenario owns alone re-applies byte-identical read-back output. A
+table that keeps other rows keeps its sequence. The shape is identical either way: the same children point at the same parents, because
 each key is learned by joining on the UUID. A read-back seed file is an artifact of a run,
 not a reviewable document.
 
@@ -77,33 +77,30 @@ semis apply scenarios/minimal_seed.yaml -o db/seeds/again --database-url postgre
 
 ```text
 scenario minimal_seed is already applied: prep_seed.tb_continent holds its rows
-Hint: A scenario applies once, to a reset database. Reset it with psql -c 'TRUNCATE "catalog"."tb_continent", "prep_seed"."tb_continent", "catalog"."tb_country", "prep_seed"."tb_country" RESTART IDENTITY', or recreate the database, then apply again.
+Hint: A scenario applies once, to a reset database. Apply it with semis apply --reset, or run semis reset first: either deletes the scenario's rows, and only those.
 ```
 
-To apply it again, reset the run's tables with the hint's statement, or recreate the
-database. The statement empties those tables whole, other scenarios' rows and rows the
-schema's DDL inserted included, and no other table: every name is quoted, and there is no
-`CASCADE`.
+To apply it again, `semis apply --reset` deletes the rows the scenario wrote, then applies
+it, in one transaction: a failed apply leaves the first run's rows in place.
+`semis reset` deletes them alone. Either deletes, from each table the run writes into
+and in prep-seed each staging twin, the rows in the scenario's UUID range, children
+first, and no others: rows another tool or scenario wrote stay, and so do the reference
+rows the schema's DDL inserted. There is no `TRUNCATE` and no `CASCADE`.
 
 ```bash
-psql -d myproject_dev -c 'TRUNCATE "catalog"."tb_continent", "prep_seed"."tb_continent", "catalog"."tb_country", "prep_seed"."tb_country" RESTART IDENTITY'
-semis apply scenarios/minimal_seed.yaml -o db/seeds/again --database-url postgresql:///myproject_dev
+semis apply scenarios/minimal_seed.yaml --reset -o db/seeds/again --database-url postgresql:///myproject_dev
 ```
 
-When a table the run does not write has a foreign key into one of them, PostgreSQL
-refuses the statement and empties nothing:
+A row the scenario did not write that points at one it did, from any schema, refuses
+the reset before anything is deleted, whatever the key's `ON DELETE`, so no cascade or
+`SET NULL` reaches a row semis did not write:
 
 ```text
-ERROR:  cannot truncate a table referenced in a foreign key constraint
-DETAIL:  Table "tb_city" references "tb_country".
-HINT:  Truncate table "tb_city" at the same time, or use TRUNCATE ... CASCADE.
+scenario minimal_seed: 3 rows of catalog.tb_city point at its rows of catalog.tb_country, by tb_city_fk_country_fkey
 ```
 
-Whether that table's rows may go too is yours to decide: add it to the statement, or
-recreate the database.
-
-`RESTART IDENTITY` matters in read-back: a plain `TRUNCATE` keeps the identity sequences
-where they were, so the keys differ from the first run's, as above.
+Whether those rows may go too is yours to decide: delete or repoint them, or recreate the
+database.
 
 There is no upsert, by design. `ON CONFLICT DO NOTHING` would apply a scenario that has
 drifted from the rows it once wrote, and say nothing about it. The check is per scenario:

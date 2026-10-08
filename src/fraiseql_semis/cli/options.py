@@ -44,12 +44,28 @@ DryRunApply = Annotated[
     bool,
     typer.Option("--dry-run", help="Apply every row, then roll back: nothing is kept."),
 ]
+DryRunReset = Annotated[
+    bool,
+    typer.Option("--dry-run", help="Delete the scenario's rows, then roll back: nothing is lost."),
+]
 DryRunInMode = Annotated[
     bool,
     typer.Option(
         "--dry-run",
         help="Read-back applies every row and rolls back; prep-seed writes no file: nothing "
         "is kept.",
+    ),
+]
+PinCheck = Annotated[
+    bool,
+    typer.Option("--check", help="Write nothing; exit 1 if the pin would change, for CI."),
+]
+Reset = Annotated[
+    bool,
+    typer.Option(
+        "--reset",
+        help="Delete the scenario's rows first, in the same transaction: a failed apply "
+        "keeps them.",
     ),
 ]
 NoPin = Annotated[

@@ -4,37 +4,40 @@ description: How a scenario records a digest of the schema facts semis reads, an
 ---
 
 A scenario replayed against a schema that has moved writes a wrong seed, silently. A pin
-turns that into a refusal: the scenario records a digest of the facts semis read, and a
-run against a schema whose facts differ is refused, reporting what changed.
+turns that into a refusal: `semis pin` records a digest of the facts semis reads, beside
+the scenario, and a run against a schema whose facts differ is refused, reporting what
+changed.
 
-```yaml
-schema_pin:
-  source: ddl              # ddl | live — a pin is comparable only with its own kind
-  digest: sha256:b02f4b364d06650c…
-  confiture: "1.30.0"
-  taken: 2026-09-23
-  facts: minimal_seed.facts.json # the facts digested, kept beside the scenario
+```json
+// scenarios/minimal_seed.pin.json
+{
+  "confiture": "1.30.0",
+  "digest": "sha256:b02f4b364d06650c…",
+  "facts": [{"table": "catalog.tb_continent", "surrogate_pk": "pk_continent", …}, …],
+  "source": "ddl",
+  "taken": "2026-09-23"
+}
 ```
 
 ## Pin a scenario
 
-Every run writes `schema_pin.yaml` beside its seeds, and beside it the facts it digested,
-as JSON, in a file named after the scenario: `continents.facts.json`. In the project from
-[Getting started](/getting-started/), write the seeds, copy the facts beside the scenario,
-and paste the block into it:
+In the project from [Getting started](/getting-started/), take the scenario's pin:
 
 ```bash
-semis seeds scenarios/continents.yaml -o db/seeds
-cp db/seeds/continents.facts.json scenarios/
-cat db/seeds/schema_pin.yaml >> scenarios/continents.yaml
+semis pin scenarios/continents.yaml
 ```
 
-semis never rewrites a scenario file: pinning is the author's act, and a scenario without
-a pin runs and says that it is unpinned. The facts file is the pin's own record of what it
-digested, keys sorted, so a re-pin reads as a diff in review. It must be the file the
-digest was taken from: a stale or swapped copy is refused when the scenario loads. A pin
-written by semis 0.1.0 kept a DDL snapshot, or nothing, in place of its facts: it is
-refused with a hint to re-pin.
+It writes `continents.pin.json` beside the scenario: the digest, how the schema was read,
+the confiture that read it, the date, and the facts the digest was taken from, keys
+sorted, so a re-pin reads as a diff in review. Commit it with the scenario.
+
+semis never rewrites a scenario file, and writes its pin only when asked: pinning is the
+author's act, and a scenario without a pin runs and says that it is unpinned. When the
+file already keeps the schema's pin, `semis pin` says it is unchanged and writes nothing,
+so its date does not churn. Loading the scenario reads the file back and refuses one whose
+digest is not its facts', so a stale or swapped copy is never trusted; `semis pin`
+replaces such a file. A `schema_pin:` block in the scenario, or a `continents.facts.json`
+beside it, as semis 0.2.0 kept a pin, is refused with the hint to run `semis pin`.
 
 ## A schema that moves
 
@@ -71,14 +74,23 @@ scenario continents was pinned to sha256:be7c152ffa4c2ca5da8691e3549b1b5fa2d4a40
 What moved:
   catalog.tb_country.name: type_key varchar(80) → varchar(60)
   catalog.tb_country.name: raw_sql_type VARCHAR(80) → VARCHAR(60)
-Hint: Review the changes, then re-pin the scenario from the schema_pin.yaml `semis seeds -o <dir>` or `semis apply` writes beside its seeds, or pass --no-pin for one run.
+Hint: Review the changes, then accept them with semis pin on the scenario, or pass --no-pin for one run.
 ```
 
 The command exits 1. The refusal compares the facts the pin kept with the schema's, so it
 names each table and column that moved, and how, from any source. To accept the change,
-re-pin: `semis seeds` writes the schema's new pin beside the seeds before it refuses the
-run. Paste its `schema_pin.yaml` in place of the scenario's `schema_pin:` block, and copy
-its `continents.facts.json` over the one beside the scenario.
+pin the scenario again. It names what moved, and rewrites the file:
+
+```bash
+semis pin scenarios/continents.yaml
+```
+
+```text
+What moved:
+  catalog.tb_country.name: type_key varchar(80) → varchar(60)
+  catalog.tb_country.name: raw_sql_type VARCHAR(80) → VARCHAR(60)
+wrote scenarios/continents.pin.json: scenario continents is pinned (ddl sha256:43fedb3a7ba5d5133827e0e28107827d3f501fb9a0125aa06e5954a153392ca6)
+```
 
 `--no-pin` skips the check for one run, and says so:
 

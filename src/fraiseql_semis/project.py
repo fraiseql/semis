@@ -12,7 +12,7 @@ from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 
 from fraiseql_semis.codes import TableCodes
-from fraiseql_semis.errors import ProjectError
+from fraiseql_semis.errors import ProjectError, refuse_unknown
 from fraiseql_semis.faker_provider import Library, Provider
 from fraiseql_semis.providers import SHIPPED
 from fraiseql_semis.readback import checked_url
@@ -113,7 +113,7 @@ class Project:
         data = read_yaml(path, ProjectError, _PROJECT_YAML)
         if not isinstance(data, dict):
             raise ProjectError(f"{path} holds no mapping")
-        _refuse_unknown(str(path), data, _PROJECT_KEYS)
+        refuse_unknown(str(path), data, _PROJECT_KEYS, error=ProjectError)
         for key in ("schema", "table_codes"):
             if key not in data:
                 raise ProjectError(f"{path} has no {key}:")
@@ -196,7 +196,7 @@ def _schema(path: Path, block: object) -> ProjectSchema:
     """The ``schema:`` block: exactly one source, its paths resolved beside the file."""
     if not isinstance(block, dict):
         raise ProjectError(f"{path}: schema: is a mapping naming ddl:, env: or database:")
-    _refuse_unknown(f"{path}: schema:", block, _SCHEMA_KEYS)
+    refuse_unknown(f"{path}: schema:", block, _SCHEMA_KEYS, error=ProjectError)
     given = [key for key in _SOURCES if key in block]
     if len(given) != 1:
         raise ProjectError(f"{path}: schema: names exactly one of ddl:, env: and database:")
@@ -346,7 +346,7 @@ def _prep_seed(path: Path, block: object) -> tuple[Staging, Path | None, str | N
     (resolved beside the project file), and the final tables' fallback schema."""
     if not isinstance(block, dict):
         raise ProjectError(f"{path}: prep_seed: is a mapping")
-    _refuse_unknown(f"{path}: prep_seed:", block, _PREP_SEED_KEYS)
+    refuse_unknown(f"{path}: prep_seed:", block, _PREP_SEED_KEYS, error=ProjectError)
     schema = block.get("prep_seed_schema", Staging.schema)
     if not isinstance(schema, str):
         raise ProjectError(f"{path}: prep_seed: prep_seed_schema: is a string")
@@ -376,12 +376,3 @@ def _table_codes(path: Path, value: object) -> TableCodes:
         if type(code) is not int:
             raise ProjectError(f"{path}: {table}'s code is {code!r}, not an integer")
     return TableCodes(value)
-
-
-def _refuse_unknown(where: str, data: dict[object, object], known: set[str]) -> None:
-    unknown = sorted(str(key) for key in set(data) - known)
-    if unknown:
-        raise ProjectError(
-            f"{where}: unknown key {', '.join(unknown)}",
-            resolution_hint=f"Known keys: {', '.join(sorted(known))}.",
-        )

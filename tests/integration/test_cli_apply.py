@@ -1,6 +1,5 @@
 """``semis apply``: a scenario written and applied in one transaction, committed on success."""
 
-import shlex
 import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -22,7 +21,10 @@ LOCATION = f"{SCHEMA}.tb_location"
 CUSTOMER = f"{SCHEMA}.tb_customer"
 TAG = f"{SCHEMA}.tb_tag"
 STAGING = f"{SCHEMA}_prep"
-RESET = f'TRUNCATE "{SCHEMA}"."tb_continent", "{SCHEMA}"."tb_country" RESTART IDENTITY'
+HINT = (
+    "Hint: A scenario applies once, to a reset database. Apply it with semis apply --reset, "
+    "or run semis reset first: either deletes the scenario's rows, and only those."
+)
 DDL = f"""
 CREATE SCHEMA {SCHEMA};
 CREATE TABLE {CONTINENT} (
@@ -178,14 +180,31 @@ def test_dry_run_rolls_back_and_reports_each_level(database: str, tmp_path: Path
     )
 
 
-def test_apply_reports_each_file_the_pin_and_the_commit(database: str, tmp_path: Path) -> None:
+def test_apply_reports_each_file_and_the_commit(database: str, tmp_path: Path) -> None:
     out = tmp_path / "out"
     result = _apply(tmp_path, database, READ_BACK, "-o", str(out))
     assert result.output.splitlines()[1:] == [
         f"applied 001_{CONTINENT}.sql  2 rows",
         f"applied 002_{COUNTRY}.sql    4 rows",
-        f"wrote {out / 'schema_pin.yaml'}: copy it into the scenario to pin its schema",
         "committed",
+    ]
+
+
+def test_apply_without_an_output_applies_and_writes_no_file(
+    database: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The seeds are the database's: without -o, none is left on disk."""
+    monkeypatch.chdir(tmp_path)
+    result = _apply(tmp_path, database, READ_BACK)
+    assert (result.exit_code, result.output.splitlines()[1:]) == (
+        0,
+        [f"applied {CONTINENT}  2 rows", f"applied {COUNTRY}    4 rows", "committed"],
+    )
+    assert (_count(database, CONTINENT), _count(database, COUNTRY)) == (2, 4)
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "scenario.yaml",
+        "schema.sql",
+        "semis.yaml",
     ]
 
 
@@ -244,9 +263,7 @@ def test_a_second_apply_is_refused_before_it_writes(database: str, tmp_path: Pat
     assert (first.exit_code, again.exit_code) == (0, 1)
     assert again.stderr.splitlines() == [
         f"scenario two_tables is already applied: {CONTINENT} holds its rows",
-        "Hint: A scenario applies once, to a reset database. Reset it with "
-        f"psql -c '{RESET}', "
-        "or recreate the database, then apply again.",
+        HINT,
     ]
     assert not (tmp_path / "again").exists()
     assert (_count(database, CONTINENT), _count(database, COUNTRY)) == (2, 4)
@@ -259,9 +276,7 @@ def test_a_dry_run_reports_the_same_refusal(database: str, tmp_path: Path) -> No
         1,
         [
             f"scenario two_tables is already applied: {CONTINENT} holds its rows",
-            "Hint: A scenario applies once, to a reset database. Reset it with "
-            f"psql -c '{RESET}', "
-            "or recreate the database, then apply again.",
+            HINT,
         ],
     )
 
@@ -285,53 +300,9 @@ def test_a_prep_seed_reapply_is_found_in_the_staging_twin(database: str, tmp_pat
         1,
         [
             f"scenario two_tables is already applied: {STAGING}.tb_continent holds its rows",
-            "Hint: A scenario applies once, to a reset database. Reset it with "
-            f'psql -c \'TRUNCATE "{SCHEMA}"."tb_continent", "{STAGING}"."tb_continent" '
-            "RESTART IDENTITY', "
-            "or recreate the database, then apply again.",
+            HINT,
         ],
     )
-
-
-def _printed_reset(result: Result) -> str:
-    """The statement the refusal's hint tells the reader to run with ``psql -c``."""
-    hint = result.stderr.splitlines()[1]
-    quoted = hint.split("psql -c ", 1)[1].rsplit(", or recreate the database", 1)[0]
-    (statement,) = shlex.split(quoted)
-    return statement
-
-
-def test_the_printed_reset_lets_the_scenario_apply_again(database: str, tmp_path: Path) -> None:
-    """Run as printed, the reset empties the run's tables and restarts their keys at 1."""
-    _apply(tmp_path, database, READ_BACK, "-o", str(tmp_path / "first"))
-    again = _apply(tmp_path, database, READ_BACK, "-o", str(tmp_path / "again"))
-    with psycopg.connect(database, autocommit=True) as connection:
-        connection.execute(_printed_reset(again).encode())
-    third = _apply(tmp_path, database, READ_BACK, "-o", str(tmp_path / "third"))
-    with psycopg.connect(database) as connection:
-        keys = connection.execute(f"SELECT min(pk_continent), count(*) FROM {CONTINENT}").fetchone()
-    assert (third.exit_code, keys) == (0, (1, 2))
-
-
-def test_the_reset_meets_a_foreign_key_from_outside_the_run(database: str, tmp_path: Path) -> None:
-    """No CASCADE: PostgreSQL refuses to empty a table another table references, and
-    empties nothing."""
-    _apply(tmp_path, database, READ_BACK, "-o", str(tmp_path / "first"))
-    with psycopg.connect(database, autocommit=True) as connection:
-        connection.execute(
-            f"CREATE TABLE {SCHEMA}.tb_outside (fk_continent BIGINT REFERENCES {CONTINENT})"
-        )
-    again = _apply(tmp_path, database, READ_BACK, "-o", str(tmp_path / "again"))
-    with (
-        psycopg.connect(database, autocommit=True) as connection,
-        pytest.raises(psycopg.errors.FeatureNotSupported) as refused,
-    ):
-        connection.execute(_printed_reset(again).encode())
-    assert (refused.value.diag.message_primary, refused.value.diag.message_hint) == (
-        "cannot truncate a table referenced in a foreign key constraint",
-        'Truncate table "tb_outside" at the same time, or use TRUNCATE ... CASCADE.',
-    )
-    assert (_count(database, CONTINENT), _count(database, COUNTRY)) == (2, 4)
 
 
 def test_a_prep_seed_table_whose_id_is_text_applies(database: str, tmp_path: Path) -> None:

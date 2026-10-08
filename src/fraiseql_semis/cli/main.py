@@ -20,6 +20,7 @@ from fraiseql_semis.cli.options import (
     DatabaseUrl,
     DryRunApply,
     DryRunInMode,
+    DryRunReset,
     DryRunWrite,
     Format,
     Locale,
@@ -28,6 +29,8 @@ from fraiseql_semis.cli.options import (
     Name,
     NoPin,
     Output,
+    PinCheck,
+    Reset,
     ScenarioFile,
     ScenarioId,
     ScenarioToValidate,
@@ -41,6 +44,7 @@ from fraiseql_semis.errors import ProjectError, ScenarioError, SemisError
 from fraiseql_semis.project import Project
 from fraiseql_semis.readback import exclusive, transaction
 from fraiseql_semis.scenario import (
+    Deleted,
     Run,
     Scenario,
     ScenarioEntry,
@@ -198,6 +202,7 @@ def apply(  # noqa: PLR0913 — one argument; the rest are the run's options
     database_url: DatabaseUrl = None,
     format: Format = None,
     dry_run: DryRunApply = False,
+    reset: Reset = False,
     no_pin: NoPin = False,
     verbose: Verbose = False,
     scenario_id: ScenarioId = None,
@@ -207,7 +212,59 @@ def apply(  # noqa: PLR0913 — one argument; the rest are the run's options
     """Write a scenario's seeds and apply them, in one transaction committed at the end."""
     options = _Options(output, database_url, format, dry_run, no_pin, verbose)
     project, manager, loaded = _load(scenario, config, options, scenario_id, seed, locale)
-    _apply(project, manager, loaded, options)
+    _apply(project, manager, loaded, options, reset=reset)
+
+
+@app.command()
+@_refusals
+def pin(
+    scenario: ScenarioFile,
+    *,
+    config: Config = None,
+    database_url: DatabaseUrl = None,
+    check: PinCheck = False,
+) -> None:
+    """Take a scenario's schema pin into <name>.pin.json beside it, and say what moved."""
+    project = _require(config)
+    manager = project.manager(database_url=database_url)
+    loaded = manager.load(scenario, read_pin=False)
+    change = manager.pin(loaded, scenario, check=check)
+    if not change.changed:
+        typer.echo(f"{change.path} is unchanged")
+        return
+    if change.changes:
+        typer.echo("What moved:")
+        for line in change.changes:
+            typer.echo(f"  {line}")
+    if check:
+        typer.echo(f"{change.path} would change: run semis pin on the scenario to accept it")
+        raise typer.Exit(1)
+    typer.echo(
+        f"wrote {change.path}: scenario {loaded.name} is pinned "
+        f"({change.pin.source} {change.pin.digest})"
+    )
+
+
+@app.command()
+@_refusals
+def reset(
+    scenario: ScenarioFile,
+    *,
+    config: Config = None,
+    database_url: DatabaseUrl = None,
+    dry_run: DryRunReset = False,
+) -> None:
+    """Delete the rows a scenario wrote, and only those, in one transaction committed at
+    the end."""
+    project = _require(config)
+    manager = project.manager(database_url=database_url)
+    loaded = manager.load(scenario)
+    url = project.database_url(database_url, mutating=True)
+    with exclusive(url, loaded.id), transaction(url, commit=not dry_run) as connection:
+        deleted = manager.reset(loaded, connection=connection)
+    for table in deleted:
+        typer.echo(_deleted(table))
+    typer.echo("rolled back: nothing was deleted" if dry_run else "committed")
 
 
 @app.command()
@@ -307,7 +364,7 @@ def validate_seeds(  # noqa: PLR0913 — one argument; the rest are the validati
                 no_pin=no_pin,
             )
             _notices(validation.run.notices)
-            report, seeds = validation.report, validation.run.pin_path.parent
+            report, seeds = validation.report, validation.seeds_dir
     files = len(report.scanned_files)
     typer.echo(f"validated {files} seed file{_plural(files)} at levels 1-{level}")
     if _findings(report, seeds, schema_dir):
@@ -373,51 +430,70 @@ def _write(manager: ScenarioManager, scenario: Scenario, options: _Options) -> N
         return
     run = manager.execute(scenario, options.out_dir(), format=format, no_pin=no_pin)
     _report(run, "wrote", options.verbose)
-    _pin_written(run)
 
 
 def _apply(
-    project: Project, manager: ScenarioManager, scenario: Scenario, options: _Options
+    project: Project,
+    manager: ScenarioManager,
+    scenario: Scenario,
+    options: _Options,
+    *,
+    reset: bool = False,
 ) -> None:
     """*scenario* applied in one transaction: committed, or under ``--dry-run`` rolled back.
 
     The scenario's lock is held around that transaction, so a second apply of it waits.
+    With *reset*, the scenario's rows are deleted first, in the same transaction, so a
+    failed apply keeps them.
     """
     url = project.database_url(options.database_url, mutating=True)
     format, no_pin = options.format, options.no_pin
-    out_dir = None if options.dry_run else options.out_dir()
     with (
         exclusive(url, scenario.id),
         transaction(url, commit=not options.dry_run) as connection,
     ):
-        if out_dir is None:
+        for table in manager.reset(scenario, connection=connection) if reset else ():
+            typer.echo(_deleted(table))
+        if options.dry_run:
             run = manager.rehearse(scenario, connection=connection, format=format, no_pin=no_pin)
         else:
             run = manager.apply(
-                scenario, out_dir, connection=connection, format=format, no_pin=no_pin
+                scenario, options.output, connection=connection, format=format, no_pin=no_pin
             )
-    if out_dir is None:
+    if options.dry_run:
         _report(run, "would apply", options.verbose)
         typer.echo("rolled back: nothing was written or applied")
         return
-    _report(run, "applied", options.verbose)
-    _pin_written(run)
+    _report(run, "applied", options.verbose, files=options.output is not None)
     typer.echo("committed")
 
 
-def _report(run: Run, verb: str, verbose: bool) -> None:
-    """The pin check's notices, then one line per seed file."""
+def _report(run: Run, verb: str, verbose: bool, *, files: bool = True) -> None:
+    """The pin check's notices, then one line per seed: named by its file, or, when no
+    file is kept, by the table and level it holds."""
     _notices(run.notices)
-    width = max((len(seed.path.name) for seed in run.seeds), default=0)
-    for seed in run.seeds:
-        line = f"{verb} {seed.path.name:<{width}}  {seed.rows} row{_plural(seed.rows)}"
+    names = [seed.path.name if files else _written_to(seed.path) for seed in run.seeds]
+    width = max((len(name) for name in names), default=0)
+    for seed, name in zip(run.seeds, names, strict=True):
+        line = f"{verb} {name:<{width}}  {seed.rows} row{_plural(seed.rows)}"
         if verbose:
             line += f"  {seed.format}: {', '.join(seed.columns)}"
         typer.echo(line)
 
 
-def _pin_written(run: Run) -> None:
-    typer.echo(f"wrote {run.pin_path}: copy it into the scenario to pin its schema")
+def _written_to(path: Path) -> str:
+    """What the seed file at *path* fills: its name without the walk's number and
+    ``.sql``, the table, and a hierarchy's level, ``catalog.tb_location.L2``."""
+    return path.stem.split("_", 1)[1]
+
+
+def _deleted(table: Deleted) -> str:
+    """One line of a reset: the rows deleted from *table*, and the rows it kept."""
+    said = [f"{table.kept} other row{_plural(table.kept)} kept"] if table.kept else []
+    if table.restarted is not None:
+        said.append("identity restarted" if table.restarted else "identity not restarted")
+    line = f"deleted {table.rows} row{_plural(table.rows)} from {table.table}"
+    return "; ".join([line, ", ".join(said)]) if said else line
 
 
 def _notices(notices: tuple[str, ...]) -> None:

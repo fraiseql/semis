@@ -79,7 +79,10 @@ found, round-robin.
 
 This is the only SQL semis writes: taking the scenario's lock, so two applies of it never
 overlap, asking whether it is
-[already applied](/concepts/determinism/#a-scenario-applies-once), reading the keys of
+[already applied](/concepts/determinism/#a-scenario-applies-once), deleting them for
+[`semis reset`](/reference/cli/#semis-reset) and restarting the identity of a table it
+empties, once it has locked the tables that
+reference the run's and found none of their rows pointing at the scenario's, reading the keys of
 [existing rows](#parents-already-in-the-database), learning keys, and setting a
 [hierarchy's](/guides/scenarios/#hierarchies) paths from them.
 
@@ -87,6 +90,19 @@ overlap, asking whether it is
 SELECT pg_advisory_xact_lock(%s, %s)
 
 SELECT EXISTS (SELECT FROM <schema>.<table> WHERE <natural_id> BETWEEN %s AND %s)
+
+DELETE FROM <schema>.<table> WHERE <natural_id> BETWEEN %s AND %s
+
+SELECT count(*) FROM <schema>.<table>
+
+LOCK TABLE <tables> IN SHARE MODE
+
+SELECT count(*) FROM <schema>.<table> AS r WHERE EXISTS (SELECT FROM <target_schema>.<target>
+  AS t WHERE <t.key = r.key> AND t.<natural_id> BETWEEN %s AND %s)
+
+AND (r.<own_natural_id> BETWEEN %s AND %s) IS NOT TRUE
+
+ALTER TABLE <schema>.<table> ALTER COLUMN <identity> RESTART, …
 
 SELECT <surrogate_pk> FROM <schema>.<table> ORDER BY <surrogate_pk>
 
@@ -125,10 +141,15 @@ rows semis did not write have none it can know.
 
 ## In either mode
 
-A foreign key points at a row of the run, so its parent table must be generated in the
-same run, or, in read-back, listed under `existing:`. A parent the run lacks is refused before a row is drawn, by `semis validate` as
-by `semis seeds`. A **nullable** key may instead be overridden `null`: it is written
-`NULL`, and its parent is not required.
+A foreign key points at a row of the run: a row of a parent table the same run
+generates, or, in read-back, of one listed under `existing:`. A **nullable** key whose
+parent the run lacks is written `NULL`, since that is the only value the run can give
+it, and the run names it among the columns it leaves `NULL`. A NOT NULL one is refused
+before a row is drawn, by `semis validate` as by `semis seeds`. A parent in the run with
+`count: 0` has no rows, and counts as none.
+
+A nullable key may also be overridden `null`: written `NULL` even when its parent is in
+the run, and no longer named among the columns left `NULL`.
 
 ```yaml
   - name: inventory.tb_item
@@ -136,8 +157,7 @@ by `semis seeds`. A **nullable** key may instead be overridden `null`: it is wri
     overrides: {fk_account: null, fk_order: null}   # no account, no order
 ```
 
-That is the scenario's word, never semis' guess: without the override the parent is still
-required. A NOT NULL key, or a table's key to itself, overridden `null` is refused.
+A NOT NULL key, or a table's key to itself, overridden `null` is refused.
 
 The writer follows the mode: prep-seed writes `INSERT`, read-back writes `COPY`.
 `--format copy` or `--format insert` overrides either, and confiture's level 1 reads both.

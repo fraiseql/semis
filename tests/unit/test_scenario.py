@@ -280,6 +280,28 @@ def test_fill_loads(tmp_path: Path, given: str, fill: object) -> None:
     assert spec.fill == fill
 
 
+COPYING = MINIMAL.replace("tb_continent\n    count: 2", "tb_country\n    count: 2")
+
+
+def test_copies_loads_each_column_with_its_key_and_parent_column(tmp_path: Path) -> None:
+    (spec,) = _load(tmp_path, COPYING + "    copies:\n      tenant_id: fk_org.id\n").tables
+    assert spec.copies == {"tenant_id": ("fk_org", "id")}
+
+
+@pytest.mark.parametrize(
+    "copies",
+    ["{tenant_id: fk_org}", "{tenant_id: 3}", "{3: fk_org.id}", "{tenant_id: fk_org.}", "[x]"],
+    ids=["no-dot", "number", "number-key", "no-column", "list"],
+)
+def test_a_malformed_copies_is_refused_with_the_shape_to_write(tmp_path: Path, copies: str) -> None:
+    with pytest.raises(
+        ScenarioError,
+        match=r"^scenario minimal_seed: catalog\.tb_country: copies maps a column to "
+        r"<foreign key>\.<parent column>",
+    ):
+        _load(tmp_path, COPYING + f"    copies: {copies}\n")
+
+
 def test_catalogue_refuses_a_file_that_is_no_scenario(tmp_path: Path) -> None:
     (tmp_path / "codes.yaml").write_text("catalog.tb_continent: 0x02030405\n")
     with pytest.raises(ScenarioError, match=r"codes\.yaml is not a scenario"):
@@ -492,9 +514,9 @@ def test_a_run_s_locale_is_checked_too() -> None:
 
 
 def test_catalogue_reads_scenarios_alone(tmp_path: Path) -> None:
+    """A scenario's pin file beside it is not a scenario."""
     (tmp_path / "minimal_seed.yaml").write_text(MINIMAL)
-    (tmp_path / "schema_pin.yaml").write_text("schema_pin: {source: ddl}\n")
-    (tmp_path / "minimal_seed.facts.json").write_text("[]\n")
+    (tmp_path / "minimal_seed.pin.json").write_text("{}\n")
     assert [entry.name for entry in catalogue(tmp_path)] == ["minimal_seed"]
 
 

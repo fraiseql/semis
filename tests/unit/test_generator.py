@@ -195,3 +195,34 @@ def test_fill_naming_a_column_semis_would_not_leave_null_is_refused(
         generator.generate_rows(
             CUSTOMER, 3, fill=frozenset({column}), trusted=frozenset({"created_by"})
         )
+
+
+OPTIONAL = SchemaFacts.from_source(
+    TRINITY.replace("fk_continent BIGINT NOT NULL REFERENCES", "fk_continent BIGINT REFERENCES"),
+    table_codes=TableCodes(CODES),
+)
+
+
+@pytest.mark.parametrize(
+    ("counts", "trusted", "overrides", "left"),
+    [
+        ({"catalog.tb_country": 1}, frozenset(), {}, ("fk_continent",)),
+        ({"catalog.tb_country": 1, "catalog.tb_continent": 1}, frozenset(), {}, ()),
+        ({"catalog.tb_country": 1}, frozenset({"fk_continent"}), {}, ()),
+        ({"catalog.tb_country": 1}, frozenset(), {"fk_continent": None}, ()),
+    ],
+    ids=["no-parent", "parent", "trusted", "overridden-null"],
+)
+def test_a_key_is_left_null_only_when_the_run_has_no_parent_and_nobody_names_it(
+    counts: dict[str, int],
+    trusted: frozenset[str],
+    overrides: dict[str, object],
+    left: tuple[str, ...],
+) -> None:
+    generator = FakeDataGenerator(OPTIONAL, scenario_id=0x5001, seed=42)
+    assert (
+        generator.left_null(
+            "catalog.tb_country", trusted=trusted, overrides=overrides, counts=counts
+        )
+        == left
+    )

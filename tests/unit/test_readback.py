@@ -59,17 +59,25 @@ def test_an_existing_table_without_a_surrogate_key_is_refused_before_the_databas
         ),
     ],
 )
-def test_the_reset_quotes_every_name_and_cascades_nowhere(ddl: str, table: str) -> None:
-    """A reserved word, a dot or a capital letter: each reads back as the table it names,
-    and a table outside the run is never emptied behind the reader's back."""
-    refs = SchemaFacts.from_source(ddl, table_codes=TableCodes({})).insert_order()
-    assert readback.reset(refs) == f"TRUNCATE {table} RESTART IDENTITY"
+def test_the_reset_quotes_every_name(ddl: str, table: str) -> None:
+    """A reserved word, a dot or a capital letter: each reads back as the table it names."""
+    (ref,) = SchemaFacts.from_source(ddl, table_codes=TableCodes({})).insert_order()
+    connection = _Deleting()
+    readback.delete_range(connection, ref, "id", ("lo", "hi"))  # type: ignore[arg-type]
+    assert connection.statements == [f'DELETE FROM {table} WHERE "id" BETWEEN %s AND %s']
 
 
-def test_the_reset_lists_every_table_in_order() -> None:
-    ddl = "CREATE SCHEMA s; CREATE TABLE s.a (x TEXT); CREATE TABLE s.b (x TEXT);"
-    refs = SchemaFacts.from_source(ddl, table_codes=TableCodes({})).insert_order()
-    assert readback.reset(refs) == 'TRUNCATE "s"."a", "s"."b" RESTART IDENTITY'
+class _Deleting:
+    """A connection that records each statement, as a delete of no row."""
+
+    rowcount = 0
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(self, query: Any, _params: Any = None) -> Any:
+        self.statements.append(query.as_string())
+        return self
 
 
 class _Held:

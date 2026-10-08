@@ -4,12 +4,13 @@ Pure: facts in, rows out — no database and no file system.
 """
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Literal, TypeGuard, cast
+from dataclasses import dataclass
+from typing import Literal, NamedTuple, TypeGuard, cast
 
 from fraiseql_semis.errors import ResolutionError, ScenarioError
 from fraiseql_semis.faker_provider import CustomProviderRegistry, FakerProvider
 from fraiseql_semis.hierarchy import Hierarchy
-from fraiseql_semis.resolution import Resolver, require_parents
+from fraiseql_semis.resolution import Resolver, require_parents, unparented
 from fraiseql_semis.rows import require_row
 from fraiseql_semis.schema import ColumnFacts, SchemaFacts, TableFacts
 from fraiseql_semis.uuid_generator import SemanticUUIDGenerator
@@ -23,6 +24,36 @@ callable taking the row's 0-based index within its table."""
 Fill = frozenset[str] | Literal["all"]
 """The nullable columns a scenario asks drawn, which are otherwise written ``NULL``; or
 ``all`` of them."""
+
+
+class Copied(NamedTuple):
+    """Where a column's value is copied from: *column* of the row its foreign key *key*
+    points at."""
+
+    key: str
+    column: str
+
+
+class _Copy(NamedTuple):
+    """A copy checked against the facts: the key the row follows, the parent table it
+    points at, and the parent's column copied."""
+
+    key: ColumnFacts
+    parent: str
+    source: str
+
+
+@dataclass(frozen=True)
+class _Plan:
+    """A walk's arguments, each per table: what checking one table asks of another."""
+
+    counts: Mapping[str, int]
+    existing: frozenset[str]
+    trusted: Mapping[str, frozenset[str]]
+    overrides: Mapping[str, Mapping[str, Override]]
+    fill: Mapping[str, Fill]
+    hierarchies: Mapping[str, Hierarchy]
+    copies: Mapping[str, Mapping[str, Copied]]
 
 
 def check_override_lengths(table: str, overrides: Mapping[str, Override], count: int) -> None:
@@ -78,6 +109,8 @@ class FakeDataGenerator:
         self._identifier_column = identifier_column
         # Per table, per unique column: the values this run has emitted.
         self._seen: dict[str, dict[str, set[object]]] = {}
+        # Per parent table, per column a child copies: its rows' values, in row order.
+        self._kept: dict[str, dict[str, list[object]]] = {}
 
     @property
     def facts(self) -> SchemaFacts:
@@ -94,13 +127,14 @@ class FakeDataGenerator:
         hierarchies: Mapping[str, Hierarchy] | None = None,
         resolver: Resolver | None = None,
         existing: frozenset[str] = frozenset(),
+        copies: Mapping[str, Mapping[str, Copied]] | None = None,
     ) -> Iterator[tuple[TableFacts, Iterator[Row]]]:
         """Each table of *counts* with its rows, parents before children.
 
         *counts* maps a qualified table to its row count; *trusted* maps a table to its
         ``trusts_trigger`` columns, *overrides* to its overridden columns, *fill* to the
-        nullable columns it asks drawn, and
-        *hierarchies* a self-referencing table to its tree; *resolver* gives every
+        nullable columns it asks drawn, *copies* to the columns it copies from a parent
+        row, and *hierarchies* a self-referencing table to its tree; *resolver* gives every
         foreign key its value, and *existing* names the tables whose rows are in the
         database already, which the resolver knows. The order is ``dependency_order``'s, taken once, here: a
         cycle raises confiture's ``DependencyCycleError`` before any row is generated. Each
@@ -111,6 +145,16 @@ class FakeDataGenerator:
         """
         order = [ref.display for ref in self._facts.insert_order(counts)]
         hierarchies = hierarchies or {}
+        plan = _Plan(
+            counts,
+            existing,
+            trusted or {},
+            overrides or {},
+            fill or {},
+            hierarchies,
+            copies or {},
+        )
+        resolved: dict[str, dict[str, _Copy]] = {}
         for table in order:
             given = (overrides or {}).get(table, {})
             _check_overrides(self._facts.facts_for(table), given, counts[table])
@@ -120,10 +164,8 @@ class FakeDataGenerator:
                 trusted=(trusted or {}).get(table, frozenset()),
                 hierarchy=hierarchies.get(table),
             )
-            left_null = frozenset(column for column, value in given.items() if value is None)
-            require_parents(
-                self._facts.facts_for(table), counts, left_null=left_null, existing=existing
-            )
+            require_parents(self._facts.facts_for(table), counts, existing=existing)
+            resolved[table] = self._check_copies(table, plan)
             _check_hierarchy(
                 self._facts.facts_for(table),
                 hierarchies.get(table),
@@ -131,13 +173,22 @@ class FakeDataGenerator:
                 trusted=(trusted or {}).get(table, frozenset()),
                 overrides=(overrides or {}).get(table, {}),
             )
+        self._kept = {}
+        for copies_of in resolved.values():
+            for copy in copies_of.values():
+                self._kept.setdefault(copy.parent, {})[copy.source] = []
         return self._walk(
             order,
             counts,
+            unparented={
+                table: unparented(self._facts.facts_for(table), counts, existing=existing)
+                for table in order
+            },
             trusted=trusted or {},
             overrides=overrides or {},
             fill=fill or {},
             hierarchies=hierarchies,
+            copies=resolved,
             resolver=resolver,
         )
 
@@ -146,10 +197,12 @@ class FakeDataGenerator:
         order: list[str],
         counts: Mapping[str, int],
         *,
+        unparented: Mapping[str, frozenset[str]],
         trusted: Mapping[str, frozenset[str]],
         overrides: Mapping[str, Mapping[str, Override]],
         fill: Mapping[str, Fill],
         hierarchies: Mapping[str, Hierarchy],
+        copies: Mapping[str, Mapping[str, _Copy]],
         resolver: Resolver | None,
     ) -> Iterator[tuple[TableFacts, Iterator[Row]]]:
         for table in order:
@@ -167,7 +220,9 @@ class FakeDataGenerator:
                         trusted=trusted.get(table, frozenset()),
                         overrides=overrides.get(table, {}),
                         fill=fill.get(table, frozenset()),
+                        unparented=unparented[table],
                         hierarchy=hierarchy,
+                        copies=copies.get(table, {}),
                         resolver=resolver,
                     ),
                 )
@@ -203,7 +258,9 @@ class FakeDataGenerator:
             trusted=trusted,
             overrides=overrides or {},
             fill=fill,
+            unparented=frozenset(),
             hierarchy=None,
+            copies={},
             resolver=resolver,
         )
 
@@ -216,7 +273,9 @@ class FakeDataGenerator:
         trusted: frozenset[str],
         overrides: Mapping[str, Override],
         fill: Fill,
+        unparented: frozenset[str],
         hierarchy: Hierarchy | None,
+        copies: Mapping[str, _Copy],
         resolver: Resolver | None,
     ) -> Iterator[Row]:
         """The rows numbered *indexes* of *table_facts*' *count*, 0-based within the table.
@@ -228,11 +287,18 @@ class FakeDataGenerator:
         self._check_fill(table_facts, fill, trusted=trusted, hierarchy=hierarchy)
         _check_hierarchy(table_facts, hierarchy, count, trusted=trusted, overrides=overrides)
         omitted = _omitted(trusted, hierarchy)
-        left_null = self._left_null(table_facts, overrides, fill=fill, omitted=omitted)
+        left_null = self._left_null(
+            table_facts,
+            overrides,
+            fill=fill,
+            omitted=omitted,
+            unparented=unparented,
+            copied=frozenset(copies),
+        )
         drawers = {
             column.name: (
                 _null
-                if column.name in left_null
+                if column.name in left_null or column.name in copies
                 else self._values.drawer(column, table=table_facts.ref.display)
             )
             for column in table_facts.columns
@@ -243,11 +309,13 @@ class FakeDataGenerator:
             overrides=overrides,
             hierarchy=hierarchy,
             omitted=omitted,
+            left_null=left_null,
+            copies=copies,
             resolver=resolver,
             drawers=drawers,
         )
 
-    def left_null(
+    def left_null(  # noqa: PLR0913 — the table positionally; how its run draws it by keyword
         self,
         table: str,
         *,
@@ -255,37 +323,57 @@ class FakeDataGenerator:
         overrides: Mapping[str, Override] | None = None,
         fill: Fill = frozenset(),
         hierarchy: Hierarchy | None = None,
+        counts: Mapping[str, int] | None = None,
+        existing: frozenset[str] = frozenset(),
+        copies: Mapping[str, Copied] | None = None,
     ) -> tuple[str, ...]:
         """The columns of the qualified *table* a run writes ``NULL`` because nobody names
-        them, in the table's order: what a run tells its reader it left empty."""
+        them, in the table's order: what a run tells its reader it left empty. With the
+        run's *counts* and *existing* tables, a nullable key whose parent has no rows in
+        it is one of them; a column in *copies* is named."""
         table_facts = self._facts.facts_for(table)
         left_null = self._left_null(
-            table_facts, overrides or {}, fill=fill, omitted=_omitted(trusted, hierarchy)
+            table_facts,
+            overrides or {},
+            fill=fill,
+            omitted=_omitted(trusted, hierarchy),
+            unparented=(
+                frozenset()
+                if counts is None
+                else unparented(table_facts, counts, existing=existing)
+            ),
+            copied=frozenset(copies or {}),
         )
         return tuple(column.name for column in table_facts.columns if column.name in left_null)
 
-    def _left_null(
+    def _left_null(  # noqa: PLR0913 — table and overrides positionally; the rest by keyword
         self,
         table: TableFacts,
         overrides: Mapping[str, Override],
         *,
         fill: Fill,
         omitted: frozenset[str],
+        unparented: frozenset[str],
+        copied: frozenset[str] = frozenset(),
     ) -> frozenset[str]:
-        """*table*'s columns written ``NULL``: each nullable value column nobody names.
+        """*table*'s columns written ``NULL``: each nullable value column nobody names,
+        and each key in *unparented* neither overridden ``null`` nor omitted.
 
-        A column is named by an override, a provider registered for it by name, or
-        *fill*; a column in *omitted* is left out of the row.
+        A value column is named by an override, a provider registered for it by name, or
+        *fill*; a column in *omitted* is left out of the row. A key with no parent in the
+        run is never drawn, whatever *fill* says.
         """
+        keys = unparented - overrides.keys() - omitted
         if fill == "all":
-            return frozenset()
+            return keys
         display = table.ref.display
-        return frozenset(
+        return keys | frozenset(
             column.name
             for column in table.columns
             if self._fillable(column, table) is None
             and column.name not in omitted | fill
             and column.name not in overrides
+            and column.name not in copied
             and not self._values.names(column, table=display)
         )
 
@@ -293,16 +381,138 @@ class FakeDataGenerator:
         """Why *column* is not one a scenario chooses to draw or leave ``NULL``; ``None``
         when it is: a nullable value column. A key comes from the run's mode, a default
         is PostgreSQL's, and the natural id and the slug are semis' own."""
+        own = self._semis_own(column, table)
+        if own is not None:
+            return own
+        if column.not_null:
+            return "is NOT NULL, so semis always draws it"
+        if column.default is not None:
+            return "has a default, which PostgreSQL applies"
+        return None
+
+    def _check_copies(self, table: str, plan: _Plan) -> dict[str, _Copy]:
+        """*table*'s copies, each with the key column and parent table it follows.
+
+        Refused when the run cannot make one: into a column semis writes itself, through
+        a key it cannot follow, of a value it does not know, between two types, or of a
+        key left ``NULL`` into a NOT NULL column.
+        """
+        facts = self._facts.facts_for(table)
+        columns = {column.name: column for column in facts.columns}
+        overrides = plan.overrides.get(table, {})
+        resolved: dict[str, _Copy] = {}
+        for name, (key, source) in plan.copies.get(table, {}).items():
+            column = columns.get(name)
+            reason = _left_out(
+                name,
+                column,
+                trusted=plan.trusted.get(table, frozenset()),
+                hierarchy=plan.hierarchies.get(table),
+            )
+            if column is None or reason is not None or (own := self._semis_own(column, facts)):
+                raise ScenarioError(
+                    f"{table}.{name} {reason or own}, so it cannot be copied into",
+                    resolution_hint="Copy into a value column semis would otherwise draw.",
+                )
+            parent = self._followed(facts, key, columns.get(key), plan)
+            if isinstance(parent, str):
+                raise ScenarioError(
+                    f"{table}.{name} copies {key}.{source}, and {parent}",
+                    resolution_hint=(
+                        "Copy through a foreign key to another table the run writes, under tables:."
+                    ),
+                )
+            origin = next((c for c in parent.columns if c.name == source), None)
+            unknown = self._unknown(parent, source, origin, plan)
+            if origin is None or unknown is not None:
+                raise ScenarioError(
+                    f"{table}.{name} copies {parent.ref.display}.{source}, which {unknown}",
+                    resolution_hint=(
+                        "Copy a column whose value semis knows: the parent's natural id or "
+                        "slug, or a column it draws or overrides."
+                    ),
+                )
+            if column.type_key != origin.type_key:
+                raise ScenarioError(
+                    f"{table}.{name} is {column.type_key}, and {parent.ref.display}.{source} "
+                    f"is {origin.type_key}: a copy is not cast",
+                    resolution_hint="Copy a column of the same type.",
+                )
+            left = key in overrides or key in unparented(facts, plan.counts, existing=plan.existing)
+            if column.not_null and left:
+                raise ScenarioError(
+                    f"{table}.{name} is NOT NULL, and copies {key}, which the run leaves NULL",
+                    resolution_hint=(
+                        f"Give {key} a parent with rows in the run, or copy into a nullable column."
+                    ),
+                )
+            resolved[name] = _Copy(columns[key], parent.ref.display, source)
+        return resolved
+
+    def _followed(
+        self, table: TableFacts, key: str, column: ColumnFacts | None, plan: _Plan
+    ) -> TableFacts | str:
+        """The table *table*'s foreign key *key* points at, when the run writes it and
+        draws the key; otherwise why a copy cannot follow it."""
+        reference = column.foreign_key if column is not None else None
+        parent = reference.table.display if reference is not None else ""
+        if column is None or reference is None:
+            reason = f"{key} is not a foreign key of {table.ref.display}"
+        elif key in plan.trusted.get(table.ref.display, frozenset()):
+            reason = f"{key} is trusted to a trigger"
+        elif column.default is not None:
+            reason = f"{key} has a default, which PostgreSQL applies"
+        elif reference.table == table.ref:
+            reason = f"{key} references {parent} itself"
+        elif parent in plan.existing:
+            reason = f"{parent} is under existing:, whose keys semis reads, not its columns"
+        elif parent not in plan.counts:
+            reason = f"{parent} is not a table the run writes"
+        else:
+            return self._facts.facts_for(parent)
+        return reason
+
+    def _unknown(
+        self, parent: TableFacts, name: str, column: ColumnFacts | None, plan: _Plan
+    ) -> str | None:
+        """Why the run does not know the value of *parent*'s column *name* when its row is
+        drawn; ``None`` when it does: the natural id, the slug, an override, a copy, or a
+        column semis draws."""
+        display = parent.ref.display
+        trusted = plan.trusted.get(display, frozenset())
+        hierarchy = plan.hierarchies.get(display)
+        reason = _left_out(name, column, trusted=trusted, hierarchy=hierarchy)
+        overrides = plan.overrides.get(display, {})
+        copied = plan.copies.get(display, {})
+        if (
+            reason is not None
+            or column is None
+            or name in {parent.natural_id, self._identifier_column}
+            or name in overrides
+            or name in copied
+        ):
+            return reason
+        if column.default is not None:
+            return "has a default, which PostgreSQL applies"
+        left = self._left_null(
+            parent,
+            overrides,
+            fill=plan.fill.get(display, frozenset()),
+            omitted=_omitted(trusted, hierarchy),
+            unparented=unparented(parent, plan.counts, existing=plan.existing),
+            copied=frozenset(copied),
+        )
+        return "the run leaves NULL" if name in left else None
+
+    def _semis_own(self, column: ColumnFacts, table: TableFacts) -> str | None:
+        """Why semis writes *column* itself, whatever the scenario says: the natural id,
+        the slug, or a foreign key; ``None`` for any other column."""
         if column.name == table.natural_id:
             return "is the natural id, which carries the encoded UUID"
         if column.name == self._identifier_column:
             return "is the slug, which semis writes from the UUID"
         if column.foreign_key is not None:
             return "is a foreign key, whose value comes from the run's mode"
-        if column.not_null:
-            return "is NOT NULL, so semis always draws it"
-        if column.default is not None:
-            return "has a default, which PostgreSQL applies"
         return None
 
     def _check_fill(
@@ -319,13 +529,8 @@ class FakeDataGenerator:
         columns = {column.name: column for column in table.columns}
         for name in sorted(fill):
             column = columns.get(name)
-            if column is None:
-                reason = "is not a column semis writes"
-            elif name in trusted:
-                reason = "is trusted to a trigger, which fills it"
-            elif hierarchy is not None and name == hierarchy.path:
-                reason = "is the hierarchy's path, which read-back fills from the keys"
-            else:
+            reason = _left_out(name, column, trusted=trusted, hierarchy=hierarchy)
+            if column is not None and reason is None:
                 reason = self._fillable(column, table)
             if reason is not None:
                 raise ScenarioError(
@@ -343,23 +548,45 @@ class FakeDataGenerator:
         overrides: Mapping[str, Override],
         hierarchy: Hierarchy | None,
         omitted: frozenset[str],
+        left_null: frozenset[str],
+        copies: Mapping[str, _Copy],
         resolver: Resolver | None,
         drawers: Mapping[str, Callable[[], object]],
     ) -> Iterator[Row]:
         seen = self._seen.setdefault(table_facts.ref.display, {})
+        kept = self._kept.get(table_facts.ref.display, {})
         for index in indexes:
             given = {column: _overridden(value, index) for column, value in overrides.items()}
             points_at = None
             if hierarchy is not None and (parent := hierarchy.parent_of(index)) is not None:
                 points_at = (hierarchy.parent, parent)
             row = self._row(
-                table_facts, given, points_at, trusted=omitted, resolver=resolver, drawers=drawers
+                table_facts,
+                given,
+                points_at,
+                trusted=omitted,
+                left_null=left_null,
+                copied=frozenset(copies),
+                resolver=resolver,
+                drawers=drawers,
             )
+            for name, copy in copies.items():
+                row[name] = self._copied(table_facts.ref.display, row, copy, resolver)
             require_row(table_facts, row, trusted=omitted, seen=seen)
             for column in table_facts.columns:
                 if column.unique and row.get(column.name) is not None:
                     seen.setdefault(column.name, set()).add(row[column.name])
+            for name, values in kept.items():
+                values.append(row.get(name))
             yield row
+
+    def _copied(self, table: str, row: Row, copy: _Copy, resolver: Resolver | None) -> object:
+        """*copy*'s parent column in the row *table*'s *row* points at; ``NULL`` when its
+        key is."""
+        if row.get(copy.key.name) is None:
+            return None
+        index = _resolver(resolver, copy.key, table).pointed_at(copy.key, table=table)
+        return self._kept[copy.parent][copy.source][index]
 
     def _row(  # noqa: PLR0913 — this row positionally; its table's drawing by keyword
         self,
@@ -368,12 +595,15 @@ class FakeDataGenerator:
         points_at: tuple[str, int] | None,
         *,
         trusted: frozenset[str],
+        left_null: frozenset[str],
+        copied: frozenset[str],
         resolver: Resolver | None,
         drawers: Mapping[str, Callable[[], object]],
     ) -> Row:
         """One row. *points_at* names a hierarchy's parent column and the row it points at;
-        every other self-FK, and a root's parent, is ``NULL``. *drawers* draws each column
-        a provider fills, chosen once for the table."""
+        every other self-FK, and a root's parent, is ``NULL``. A column in *copied* holds
+        its place, for the caller to copy into once the row's keys are drawn. *drawers*
+        draws each column a provider fills, chosen once for the table."""
         encoded = self._uuids.generate(table.table_code)
         fields = SemanticUUIDGenerator.decode(encoded)
         row: Row = {}
@@ -382,12 +612,16 @@ class FakeDataGenerator:
                 row[column.name] = encoded
             elif column.name in given:
                 row[column.name] = given[column.name]
+            elif column.name in copied:
+                row[column.name] = None
             elif column.name == self._identifier_column:
                 row[column.name] = (
                     f"{self._values.word()}-{fields.scenario_id:x}-{fields.sequence:x}"
                 )
             elif column.default is not None or column.name in trusted:
                 continue
+            elif column.name in left_null:
+                row[column.name] = None
             elif _refers_to_itself(column, table):
                 row[column.name] = (
                     _resolver(resolver, column, table.ref.display).value_at(
@@ -403,6 +637,20 @@ class FakeDataGenerator:
             else:
                 row[column.name] = drawers[column.name]()
         return row
+
+
+def _left_out(
+    name: str, column: ColumnFacts | None, *, trusted: frozenset[str], hierarchy: Hierarchy | None
+) -> str | None:
+    """Why the column *name* is not in a row semis draws: not a column it writes, trusted
+    to a trigger, or the hierarchy's path; ``None`` when it is."""
+    if column is None:
+        return "is not a column semis writes"
+    if name in trusted:
+        return "is trusted to a trigger, which fills it"
+    if hierarchy is not None and name == hierarchy.path:
+        return "is the hierarchy's path, which read-back fills from the keys"
+    return None
 
 
 def _omitted(trusted: frozenset[str], hierarchy: Hierarchy | None) -> frozenset[str]:

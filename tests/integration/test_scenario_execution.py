@@ -1,6 +1,5 @@
 """A scenario file, executed: its tables walked in order, in its declared mode."""
 
-import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -94,35 +93,28 @@ def test_a_live_pin_names_the_column_that_moved(
     """A database: source keeps no DDL, and its refusal still names what moved."""
     connection.execute(f"ALTER TABLE {COUNTRY} ADD COLUMN note TEXT")
     manager = _live(connection)
-    first = manager.execute(
-        manager.load(_scenario(tmp_path)), tmp_path / "first", connection=connection
-    )
-    assert (first.pin.source, first.pin.facts) == ("live", "two_tables.facts.json")
+    path = _scenario(tmp_path)
+    taken = manager.pin(manager.load(path), path)
+    assert taken.pin.source == "live"
     connection.rollback()
     connection.execute(f"ALTER TABLE {COUNTRY} ADD COLUMN note TEXT")
     connection.execute(f"ALTER TABLE {COUNTRY} ALTER note SET NOT NULL")
-    shutil.copy(tmp_path / "first" / "two_tables.facts.json", tmp_path)
-    pinned = tmp_path / "pinned.yaml"
-    pinned.write_text(SCENARIO + first.pin_path.read_text())
     moved = _live(connection)
     with pytest.raises(PinError, match=rf"{COUNTRY}\.note: not_null false → true"):
-        moved.execute(moved.load(pinned), tmp_path / "out", connection=connection)
+        moved.execute(moved.load(path), tmp_path / "out", connection=connection)
 
 
 def test_a_ddl_pin_replayed_against_a_live_schema_is_incomparable(
     connection: psycopg.Connection, tmp_path: Path
 ) -> None:
     ddl = ScenarioManager(SchemaFacts.from_source(DDL, table_codes=CODES))
-    first = ddl.execute(ddl.load(_scenario(tmp_path)), tmp_path / "first", connection=connection)
-    connection.rollback()
-    shutil.copy(tmp_path / "first" / "two_tables.facts.json", tmp_path)
-    pinned = tmp_path / "pinned.yaml"
-    pinned.write_text(SCENARIO + first.pin_path.read_text())
+    path = _scenario(tmp_path)
+    ddl.pin(ddl.load(path), path)
     live = ScenarioManager(
         SchemaFacts.from_database(connection, schemas=[SCHEMA], table_codes=CODES)
     )
     with pytest.raises(IncomparablePinError, match="pinned against a ddl schema"):
-        live.execute(live.load(pinned), tmp_path / "out", connection=connection)
+        live.execute(live.load(path), tmp_path / "out", connection=connection)
 
 
 LOCATIONS = f"""\

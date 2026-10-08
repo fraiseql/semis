@@ -30,7 +30,8 @@ and what each value must respect, and writes, applies and validates the seed fil
 semis reads no `information_schema`, sorts no tables, and writes no seed SQL itself. All
 three are confiture's, and going through it is why `VARCHAR(50)` gets fifty characters and
 why a `REFERENCES` clause is read rather than guessed. Its only SQL is the handful of
-parameterised statements in one module, for read-back, the re-apply check and its lock.
+parameterised statements in one module, for read-back, the re-apply check, the reset and
+their lock.
 
 ---
 
@@ -143,8 +144,9 @@ tables:
     trusts_trigger: [created_by]      # a trigger fills it; do not refuse the row
 ```
 
-Every foreign key's parent is generated in the same run — a missing one is refused
-before a row is drawn — unless the key is nullable and the scenario leaves it `NULL`:
+A NOT NULL foreign key's parent is generated in the same run — a missing one is refused
+before a row is drawn. A nullable key whose parent the run lacks is written `NULL`, and
+the run says so; one overridden `null` is written `NULL` even when its parent is there:
 
 ```yaml
   - name: inventory.tb_item
@@ -174,10 +176,22 @@ table, the columns it left `NULL`; `fill: all` draws every one.
     fill: [created_by]                # drawn; deleted_at is written NULL
 ```
 
+A column may copy a value of the row its foreign key points at — a tenant id carried
+down from the organization a contact belongs to — so no UUID is computed by hand:
+
+```yaml
+  - name: tenant.tb_organization
+    count: 6
+  - name: tenant.tb_contact
+    count: 12
+    copies:
+      tenant_id: fk_customer_org.id   # the id of the organization fk_customer_org points at
+```
+
 From Python, a scenario runs through `ScenarioManager`, which writes one seed file per
-table and, beside them, `schema_pin.yaml` and the facts it digested,
-`minimal_seed.facts.json`: the block and the file to copy beside the scenario so a replay
-against a moved schema is refused, naming the table and the column that moved.
+table. `semis pin` pins it: it writes `minimal_seed.pin.json` beside the scenario, the
+digest of the facts semis read and the facts themselves, so a replay against a moved
+schema is refused, naming the table and the column that moved.
 
 ```python
 from fraiseql_semis import ScenarioManager
@@ -210,8 +224,12 @@ prep_seed:
 semis seeds scenarios/minimal_seed.yaml -o db/seeds/prep   # prep-seed: writes files, no database
 semis seeds scenarios/minimal_seed.yaml --dry-run          # every row checked, nothing written
 semis apply scenarios/minimal_seed.yaml -o db/seeds/run    # writes and applies, one transaction
+semis apply scenarios/minimal_seed.yaml                    # applies, and keeps no file
+semis reset scenarios/minimal_seed.yaml                    # deletes the scenario's rows, only those
 semis generate scenarios/minimal_seed.yaml -o db/seeds/run # seeds for prep-seed, apply for read-back
 semis validate scenarios/minimal_seed.yaml                 # schema and pin checked, no rows drawn
+semis pin scenarios/minimal_seed.yaml                      # writes minimal_seed.pin.json beside it
+semis pin scenarios/minimal_seed.yaml --check              # exits 1 if the pin would change
 semis validate-seeds scenarios/minimal_seed.yaml           # confiture's five prep-seed levels
 semis validate-seeds --seeds db/seeds/prep --max-level 3   # a directory's seeds, files only
 semis table catalog.tb_continent --count 3 --mode prep-seed --scenario-id 0x5001 -o out
@@ -338,34 +356,27 @@ semis apply scenarios/minimal_seed.yaml -o db/seeds/again --database-url postgre
 
 ```text
 scenario minimal_seed is already applied: prep_seed.tb_continent holds its rows
-Hint: A scenario applies once, to a reset database. Reset it with psql -c 'TRUNCATE "catalog"."tb_continent", "prep_seed"."tb_continent", "catalog"."tb_country", "prep_seed"."tb_country" RESTART IDENTITY', or recreate the database, then apply again.
+Hint: A scenario applies once, to a reset database. Apply it with semis apply --reset, or run semis reset first: either deletes the scenario's rows, and only those.
 ```
 
-Reset the run's tables, or recreate the database, then apply. The statement empties
-those tables whole, other scenarios' rows and rows the schema's DDL inserted included, and
-no other table:
+`--reset` deletes the rows the scenario wrote, then applies it, in one transaction: a
+failed apply leaves the first run's rows in place. `semis reset` deletes them alone.
 
 ```bash
-psql -d myproject_dev -c 'TRUNCATE "catalog"."tb_continent", "prep_seed"."tb_continent", "catalog"."tb_country", "prep_seed"."tb_country" RESTART IDENTITY'
-semis apply scenarios/minimal_seed.yaml -o db/seeds/again --database-url postgresql:///myproject_dev
+semis apply scenarios/minimal_seed.yaml --reset -o db/seeds/again --database-url postgresql:///myproject_dev
 ```
 
-When a table the run does not write has a foreign key into one of them, PostgreSQL
-refuses the statement and empties nothing:
-
-```text
-ERROR:  cannot truncate a table referenced in a foreign key constraint
-DETAIL:  Table "tb_city" references "tb_country".
-HINT:  Truncate table "tb_city" at the same time, or use TRUNCATE ... CASCADE.
-```
-
-Whether that table's rows go too is yours to decide: add it to the statement, or recreate
-the database.
+Either deletes, from each table the run writes into, the rows in the scenario's UUID
+range, children first: rows another tool or scenario wrote, and the reference rows the
+schema's DDL inserted, stay. A table left empty has its identity restarted, so a table the
+scenario owns alone applies again exactly as it first did, keys included. A row the
+scenario did not write that points at one it did, from any schema, refuses the reset
+before anything is deleted, whatever the key's `ON DELETE`: semis never cascades into a
+row it did not write.
 
 There is no upsert. `ON CONFLICT DO NOTHING` would apply a scenario that has drifted
 from the rows it once wrote and say nothing; a re-run that starts from a reset database
-writes exactly what the scenario says. `RESTART IDENTITY` also gives read-back the same
-keys as the first run.
+writes exactly what the scenario says.
 
 ## Two things semis insists on
 

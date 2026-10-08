@@ -52,8 +52,8 @@ A list must hold exactly one value per row, or the scenario is refused. An overr
 written as given: the [row contract](/concepts/row-contract/) still checks it, and a
 value longer than its column is refused rather than cut.
 
-A nullable foreign key overridden `null` is written `NULL`, and its parent table is not
-required in the run:
+A nullable foreign key whose parent table is not in the run is written `NULL`. One
+overridden `null` is written `NULL` even when its parent is:
 
 ```yaml
   - name: inventory.tb_item
@@ -80,6 +80,27 @@ existing:
 
 [The two FK modes](/concepts/fk-modes/#parents-already-in-the-database) says how their
 keys are read, and what is refused.
+
+## Copied columns
+
+A column may hold a value of the row its foreign key points at: a tenant id carried down
+from the organization a contact belongs to, say. `copies:` names the column, the key and
+the parent's column:
+
+```yaml
+  - name: tenant.tb_organization
+    count: 6
+  - name: tenant.tb_contact
+    count: 12
+    copies:
+      tenant_id: fk_customer_org.id   # the id of the organization fk_customer_org points at
+```
+
+The twelve contacts spread over the six organizations, round-robin, and each one's
+`tenant_id` is its own organization's `id`, in either mode. Nothing is written by hand,
+so a change of scenario id, table code or count moves both together. [Copied
+columns](/reference/scenario-file/#copied-columns) lists what a copy may follow and what
+is refused.
 
 ## Nullable columns
 

@@ -17,6 +17,8 @@ PURE = (
     "pin.py",
     "hierarchy.py",
     "staging.py",
+    "uuid_generator.py",
+    "codes.py",
     "providers/__init__.py",
     "providers/i18n.py",
     "providers/organization.py",

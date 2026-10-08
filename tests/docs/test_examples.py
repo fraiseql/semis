@@ -9,6 +9,7 @@ covers fails, and so does a check whose block is gone.
 
 import doctest
 import inspect
+import json
 import re
 import shlex
 import shutil
@@ -35,7 +36,10 @@ from typer.testing import CliRunner, Result
 
 import fraiseql_semis
 from fraiseql_semis import (
+    Deleted,
+    FakeDataGenerator,
     Library,
+    PrepSeedResolver,
     Project,
     ProjectSchema,
     ScenarioManager,
@@ -47,6 +51,7 @@ from fraiseql_semis import (
     seeds,
 )
 from fraiseql_semis.cli import app
+from fraiseql_semis.cli.main import _deleted
 from fraiseql_semis.project import ENTRY_POINTS
 from fraiseql_semis.providers import SHIPPED
 from tests.ddl import CODES, HIERARCHY, HIERARCHY_CODES, TRINITY, WORKED
@@ -284,13 +289,14 @@ def _decode(block: Block, context: Context) -> None:
 
 
 _AGAIN = "semis apply scenarios/minimal_seed.yaml -o db/seeds/again --database-url postgresql:///myproject_dev"
-_RESET = """psql -d myproject_dev -c 'TRUNCATE "catalog"."tb_continent", "prep_seed"."tb_continent", "catalog"."tb_country", "prep_seed"."tb_country" RESTART IDENTITY'"""
+_RESET = "semis apply scenarios/minimal_seed.yaml --reset -o db/seeds/again --database-url postgresql:///myproject_dev"
 
 
 @check("README.md", _AGAIN, database=True)
 def _again(block: Block, context: Context) -> None:
     """Applied once, then again as the block shows: refused as the next block prints,
-    nothing written; reset as the block after says, then applied."""
+    nothing written; then applied with --reset, as the block after says, and the
+    scenario's rows are the first run's count again."""
     url = context.database()
     with psycopg.connect(url, autocommit=True) as connection:
         connection.execute(_page_sql(WORKED))
@@ -308,12 +314,13 @@ def _again(block: Block, context: Context) -> None:
     printed = next(b for b in BLOCKS if b.key == ("README.md", _REFUSED))
     assert (refused.exit_code, refused.stderr.splitlines()) == (1, printed.text.splitlines())
     assert not Path("db/seeds/again").exists()
-    reset, apply = next(b for b in BLOCKS if b.key == ("README.md", _RESET)).text.splitlines()
-    statement = shlex.split(reset)[-1]
-    assert f"psql -c {shlex.quote(statement)}" in refused.stderr
-    with psycopg.connect(url, autocommit=True) as connection:
-        connection.execute(_page_sql(statement))
-    assert semis(apply).exit_code == 0
+    (reset,) = next(b for b in BLOCKS if b.key == ("README.md", _RESET)).text.splitlines()
+    assert "semis apply --reset" in refused.stderr
+    again = semis(reset)
+    assert (again.exit_code, again.output.splitlines()[-1]) == (0, "committed"), again.output
+    with psycopg.connect(url) as connection:
+        (twins,) = connection.execute("SELECT count(*) FROM prep_seed.tb_continent").fetchone()
+    assert twins == 7
 
 
 _REFUSED = "scenario minimal_seed is already applied: prep_seed.tb_continent holds its rows"
@@ -579,6 +586,12 @@ def _one_sql_site(block: Block, _context: Context) -> None:
         "{schema}": "<schema>",
         "{table}": "<table>",
         "{path}": "<path>",
+        "{tables}": "<tables>",
+        "{target_schema}": "<target_schema>",
+        "{target}": "<target>",
+        "{joined}": "<t.key = r.key>",
+        "{own}": "<own_natural_id>",
+        "{restarts}": "ALTER COLUMN <identity> RESTART, …",
     }
     shapes = []
     for template in (v for v in vars(readback).values() if isinstance(v, sql.Composable)):
@@ -686,13 +699,16 @@ def _replay(block: Block, context: Context) -> None:
     assert shown in " ".join(str(refused.value).split())
 
 
-_OUTSIDE_FK = "ERROR:  cannot truncate a table referenced in a foreign key constraint"
+_OUTSIDE_FK = (
+    "scenario minimal_seed: 3 rows of catalog.tb_city point at its rows of "
+    "catalog.tb_country, by tb_city_fk_country_fkey"
+)
 pinned(
     ARCH,
     _OUTSIDE_FK,
-    "tests/integration/test_cli_apply.py::test_the_reset_meets_a_foreign_key_from_outside_the_run",
+    "tests/integration/test_cli_reset.py::"
+    "test_a_row_outside_the_run_pointing_at_a_scenario_row_blocks_the_reset",
 )
-covered("README.md", _OUTSIDE_FK, by=(ARCH, _OUTSIDE_FK))
 pinned(
     ARCH,
     "to_json() same source, twice     → identical      ✓",
@@ -705,16 +721,24 @@ pinned(
 )
 
 
-@check(ARCH, "schema_pin:")
+_PIN_FILE = "// scenarios/minimal_seed.pin.json"
+
+
+@check(ARCH, _PIN_FILE)
 def _pin(block: Block, context: Context) -> None:
-    """A run writes a block of these keys; the digest, version and date are the run's."""
+    """semis pin writes a file of these keys, in this order, where the comment says; the
+    digest, version and date are the schema's, and the facts begin with the first table."""
+    path = context.tmp_path / "scenarios" / "minimal_seed.yaml"
+    path.parent.mkdir()
+    shutil.copy(ROOT / "scenarios" / "minimal_seed.yaml", path)
     manager = ScenarioManager(_facts(WORKED, CODES))
-    run = manager.execute(manager.load(ROOT / "scenarios" / "minimal_seed.yaml"), context.tmp_path)
-    written = yaml.safe_load(run.pin_path.read_text())["schema_pin"]
-    shown = yaml.safe_load(block.text)["schema_pin"]
-    assert list(written) == list(shown)
-    assert (written["source"], written["facts"]) == (shown["source"], shown["facts"])
-    assert written["digest"].startswith(shown["digest"].split(":")[0] + ":")
+    change = manager.pin(manager.load(path), path)
+    assert change.path.relative_to(context.tmp_path).as_posix() == _PIN_FILE.removeprefix("// ")
+    written = json.loads(change.path.read_text())
+    assert re.findall(r'^  "(\w+)":', block.text, re.MULTILINE) == list(written)
+    assert f'"source": "{written["source"]}"' in block.text
+    assert f'"table": "{written["facts"][0]["table"]}"' in block.text
+    assert written["digest"].startswith("sha256:")
 
 
 @check(ARCH, "SemisError(ConfiturError-shaped: message, error_code, exit_code, resolution_hint)")
@@ -980,7 +1004,7 @@ _quotes(
     (ARCH, _OUTSIDE_FK),
 )
 _walked(_page("concepts/determinism.md"), project=GETTING_STARTED)
-_quotes(_page("concepts/schema-pins.md"), (ARCH, "schema_pin:"))
+_quotes(_page("concepts/schema-pins.md"), (ARCH, _PIN_FILE))
 _walked(_page("concepts/schema-pins.md"), project=GETTING_STARTED)
 
 _quotes(
@@ -991,6 +1015,7 @@ _quotes(
     ("README.md", "- name: catalog.tb_location        # a flat set: no row has a parent"),
     ("README.md", "- name: shop.tb_customer"),
     ("README.md", "existing:"),
+    ("README.md", "- name: tenant.tb_organization"),
 )
 _walked(_page("guides/scenarios.md"), project=GETTING_STARTED)
 _quotes(_page("guides/provider-libraries.md"), ("README.md", _ACME), ("README.md", _ENTRY))
@@ -1073,6 +1098,81 @@ def _left_null(block: Block, context: Context) -> None:
     assert manager.check(manager.load(path), no_pin=True)[1:] == (block.text,)
 
 
+# The same table with a nullable key to a segment the run does not generate.
+SEGMENTED = SHOP.replace(
+    "CREATE TABLE shop.tb_customer",
+    "CREATE TABLE shop.tb_segment (pk_segment bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY);\n"
+    "CREATE TABLE shop.tb_customer",
+).replace(
+    "name text NOT NULL,", "name text NOT NULL,\n  fk_segment bigint REFERENCES shop.tb_segment,"
+)
+
+
+@check(
+    _page("reference/scenario-file.md"),
+    "shop.tb_customer leaves fk_segment, deleted_at NULL; fill: draws the values, "
+    "a parent under tables: or existing: points the keys",
+)
+def _key_left_null(block: Block, context: Context) -> None:
+    manager = ScenarioManager(_facts(SEGMENTED, {"shop.tb_customer": 0x0B}))
+    tables = "  - name: shop.tb_customer\n    count: 3\n    fill: [created_by]\n"
+    path = _scenario_file(context.tmp_path, tables, mode="read-back")
+    assert manager.check(manager.load(path), no_pin=True)[1:] == (block.text,)
+
+
+@check(_page("reference/scenario-file.md"), "copies:")
+def _copies_shape(block: Block, context: Context) -> None:
+    """The fragment loads as one table's copies, the key and parent column apart."""
+    tables = "  - name: catalog.tb_country\n    count: 1\n" + textwrap.indent(block.text, "    ")
+    path = _scenario_file(context.tmp_path, tables)
+    (spec,) = ScenarioManager(_facts(TRINITY, CODES)).load(path).tables
+    assert spec.copies == {"tenant_id": ("fk_customer_org", "id")}
+
+
+TENANTS = """CREATE SCHEMA tenant;
+CREATE TABLE tenant.tb_organization (pk_organization bigint GENERATED ALWAYS AS IDENTITY
+  PRIMARY KEY, id uuid NOT NULL UNIQUE, identifier text NOT NULL UNIQUE, name text NOT NULL);
+CREATE TABLE tenant.tb_contact (pk_contact bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  id uuid NOT NULL UNIQUE, identifier text NOT NULL UNIQUE, tenant_id uuid NOT NULL,
+  fk_customer_org bigint NOT NULL REFERENCES tenant.tb_organization);"""
+
+
+@check(_page("reference/cli.md"), "deleted 6 rows from shop.tb_order; identity restarted")
+def _reset_report(block: Block, _context: Context) -> None:
+    """The lines semis reset prints for a table it empties and one that keeps rows."""
+    lines = [
+        _deleted(Deleted("shop.tb_order", 6, 0, restarted=True)),
+        _deleted(Deleted("shop.tb_customer", 2, 3, restarted=False)),
+        "committed",
+    ]
+    assert lines == block.text.splitlines()
+
+
+@check("README.md", "- name: tenant.tb_organization")
+def _copied(block: Block, context: Context) -> None:
+    """What the page says: twelve contacts over six organizations, each holding its own's
+    id. In prep-seed, a key carries its parent's id, so the two columns agree."""
+    facts = _facts(TENANTS, {"tenant.tb_organization": 0x0C, "tenant.tb_contact": 0x0D})
+    manager = ScenarioManager(facts)
+    path = _scenario_file(context.tmp_path, textwrap.indent(block.text, "  "), mode="read-back")
+    scenario = manager.load(path)
+    manager.check(scenario, no_pin=True)
+    resolver = PrepSeedResolver()
+    walk = FakeDataGenerator(facts, scenario.id, seed=42).walk(
+        {spec.name: spec.count for spec in scenario.tables},
+        copies={spec.name: spec.copies for spec in scenario.tables},
+        resolver=resolver,
+    )
+    drawn: dict[str, list[dict[str, object]]] = {}
+    for table, stream in walk:
+        drawn[table.ref.display] = rows = list(stream)
+        resolver.remember(table, rows)
+    organizations = [row["id"] for row in drawn["tenant.tb_organization"]]
+    contacts = drawn["tenant.tb_contact"]
+    assert [row["tenant_id"] for row in contacts] == organizations * 2
+    assert [row["fk_customer_org"] for row in contacts] == organizations * 2
+
+
 @check("README.md", "- name: shop.tb_customer")
 def _filled(block: Block, context: Context) -> None:
     """What the comment says: the column fill: names is drawn, the other left NULL."""
@@ -1125,7 +1225,7 @@ for _first in (
     "FakeDataGenerator(facts, scenario_id, *, seed=None, locale='en_US', providers=None, identifier_column='identifier')",
     "seeds.write(path, table, rows, *, facts, mode, format=None)",
     "ScenarioManager(facts, *, providers=None, libraries=(), staging=None)",
-    "Scenario(id, name, mode, tables, locale='en_US', seed=None, description='', schema_pin=None, existing=())",
+    "Scenario(id, name, mode, tables, locale='en_US', seed=None, description='', pin=None, existing=())",
     "Project.load(path)",
     "Library(name, providers, rules=())",
 ):

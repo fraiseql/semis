@@ -45,6 +45,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
       - run: uv sync --locked
+      - name: The committed pin is the schema's
+        run: uv run semis pin scenarios/continents.yaml --check
       - name: Every scenario matches the schema it is pinned to
         run: uv run semis validate scenarios/continents.yaml
       - name: The committed seeds are what the scenario writes
@@ -63,13 +65,16 @@ same in a workflow that holds a secret or an identity.
 
 ## What each step catches
 
+- **`semis pin --check`** fails when the scenario's `continents.pin.json` is not the pin
+  the schema gives it: the schema moved, or the scenario was never pinned. It names what
+  moved and writes nothing; `semis pin` on a laptop accepts the change, as a commit to
+  review.
 - **`semis validate`** fails when the schema has moved under the scenario's pin, naming
   each table and column that moved, whatever the schema's source, and when the scenario no longer fits the schema: a table gone, a parent
   missing from the run, a staging twin missing. It draws no rows.
 - **`semis seeds` and `git diff`** fail when the generated seed files differ from the
   committed ones. The comparison is byte for byte because prep-seed output is
-  [byte-reproducible](/concepts/determinism/). It compares the `.sql` files only:
-  `schema_pin.yaml` records the date it was taken.
+  [byte-reproducible](/concepts/determinism/).
 - **`semis validate-seeds`** fails on a `CRITICAL` or `ERROR` finding at any of
   [confiture's five levels](/guides/validating-seeds/#the-five-levels). Levels 4 and 5 run
   on the service database inside a transaction rolled back.

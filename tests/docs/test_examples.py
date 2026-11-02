@@ -7,6 +7,7 @@ ARCHITECTURE shows is pinned by a contract test the document names. A block no c
 covers fails, and so does a check whose block is gone.
 """
 
+import dataclasses
 import doctest
 import inspect
 import json
@@ -54,6 +55,7 @@ from fraiseql_semis.cli import app
 from fraiseql_semis.cli.main import _deleted
 from fraiseql_semis.project import ENTRY_POINTS
 from fraiseql_semis.providers import SHIPPED
+from fraiseql_semis.translation import Translation, TranslationTable
 from tests.ddl import CODES, HIERARCHY, HIERARCHY_CODES, TRINITY, WORKED
 
 ROOT = Path(__file__).parents[2]
@@ -369,6 +371,65 @@ def _existing(block: Block, context: Context) -> None:
     assert categories == 2
 
 
+_PIN_ROWS = "semis pin scenarios/customers.yaml -d postgresql:///shop_dev"
+SHOP_TWIN = """CREATE SCHEMA prep_seed;
+CREATE TABLE prep_seed.tb_customer (id uuid NOT NULL UNIQUE, identifier text NOT NULL,
+  name text, fk_category_id uuid, fk_country_id uuid);"""
+
+
+@check("README.md", _PIN_ROWS, database=True)
+def _pin_rows(block: Block, context: Context) -> None:
+    """The README's existing: block in a prep-seed scenario: semis pin -d records the
+    rows the next block shows, and a run reaching no database points each customer at
+    the pinned UUIDs, round-robin."""
+    url = context.database()
+    with psycopg.connect(url, autocommit=True) as connection:
+        connection.execute(_page_sql(SHOP_REFERENCES + "\n" + SHOP_ROWS + "\n" + SHOP_TWIN))
+    context.monkeypatch.chdir(context.tmp_path)
+    Path("schema.sql").write_text(SHOP_REFERENCES + "\n" + SHOP_TWIN)
+    Path("semis.yaml").write_text(
+        "schema: {ddl: schema.sql}\nscenarios: scenarios/\ntable_codes:\n  shop.tb_customer: 0x0B\n"
+    )
+    existing = next(b for b in BLOCKS if b.key == ("README.md", "existing:")).text
+    Path("scenarios").mkdir()
+    Path("scenarios/customers.yaml").write_text(
+        "scenario_id: 0x5001\nname: customers\nmode: prep-seed\nseed: 42\ntables:\n"
+        f"  - name: shop.tb_customer\n    count: 6\n{existing}\n"
+    )
+    words = [url if w == "postgresql:///shop_dev" else w for w in shlex.split(block.text)]
+    pinned = CliRunner().invoke(app, words[1:])
+    assert pinned.exit_code == 0, pinned.output
+    shown = json.loads(
+        "{"
+        + next(
+            b for b in BLOCKS if b.document == "README.md" and b.text.startswith('"rows": {')
+        ).text.replace('"…"', '"x"')
+        + "}"
+    )["rows"]
+    written = json.loads(Path("scenarios/customers.pin.json").read_text())["rows"]
+    assert [
+        (r["table"], r["by"], r["where"], [value for value, _ in r["rows"]])
+        for r in written["reads"]
+    ] == [
+        (r["table"], r["by"], r["where"], [value for value, _ in r["rows"]]) for r in shown["reads"]
+    ]
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("psycopg.connect", _unreachable)
+        seeded = CliRunner().invoke(app, ["seeds", "scenarios/customers.yaml", "-o", "out"])
+    assert seeded.exit_code == 0, seeded.output
+    categories = [uuid for _, uuid in written["reads"][0]["rows"]]
+    text = Path("out/001_prep_seed.tb_customer.sql").read_text()
+    lines = [line for line in text.splitlines() if line.lstrip().startswith("('")]
+    assert [categories[k % 2] in line for k, line in enumerate(lines)] == [True] * 6
+
+
+def _unreachable(*_: object, **__: object) -> None:
+    raise AssertionError("a prep-seed run reaches no database")
+
+
+covered("README.md", '"rows": {', by=("README.md", _PIN_ROWS))
+
+
 @check("README.md", "# scenarios/minimal_seed.yaml")
 def _minimal_seed(block: Block, _context: Context) -> None:
     assert block.text + "\n" == (ROOT / "scenarios" / "minimal_seed.yaml").read_text()
@@ -592,6 +653,13 @@ def _one_sql_site(block: Block, _context: Context) -> None:
         "{joined}": "<t.key = r.key>",
         "{own}": "<own_natural_id>",
         "{restarts}": "ALTER COLUMN <identity> RESTART, …",
+        "{columns}": "<surrogate_pk>[, <identifier>][, <natural_id>]",
+        "{where}": "<where>",
+        "{parent_schema}": "<parent_schema>",
+        "{parent}": "<parent>",
+        "{column}": "<parent_column>",
+        "{key}": "<key>",
+        "{scoped}": "<scoped>",
     }
     shapes = []
     for template in (v for v in vars(readback).values() if isinstance(v, sql.Composable)):
@@ -993,6 +1061,12 @@ _quotes(
     ("README.md", "- name: inventory.tb_item"),
     ("README.md", "existing:"),
 )
+_quotes(
+    _page("concepts/fk-modes.md"),
+    ("README.md", _PIN_ROWS),
+    ("README.md", '"rows": {'),
+)
+_quotes(_page("concepts/schema-pins.md"), ("README.md", '"rows": {'))
 _quotes(_page("concepts/row-contract.md"), (ARCH, _WRITERS))
 _walked(_page("concepts/row-contract.md"))
 _quotes(
@@ -1148,6 +1222,129 @@ def _reset_report(block: Block, _context: Context) -> None:
     assert lines == block.text.splitlines()
 
 
+_MULTILINGUAL = _page("guides/multilingual.md")
+
+
+@check(_MULTILINGUAL, "CREATE SCHEMA catalog;")
+def _multilingual(block: Block, context: Context) -> None:
+    """The guide's schema and scenario: the scenario checks against the schema, and its
+    walk writes 40 translation rows, each category once in each locale, after it."""
+    shop = next(
+        b for b in BLOCKS if b.document == _MULTILINGUAL and b.title == "scenarios/shop.yaml"
+    )
+    facts = _facts(block.text, {"catalog.tb_category": 0x0D, "catalog.tl_category": 0x0E})
+    manager = ScenarioManager(facts)
+    path = context.tmp_path / "shop.yaml"
+    path.write_text(shop.text + "\n")
+    scenario = manager.load(path)
+    manager.check(scenario, no_pin=True)
+    resolver = PrepSeedResolver()
+    resolver.locales("catalog.tb_locale", {"fr-FR": "fr", "en-GB": "gb"})
+    (spec,) = scenario.tables
+    translation = Translation(
+        TranslationTable.of(facts, spec.name, cast("str", spec.translations)), scenario.locales
+    )
+    written: dict[str, list[dict[str, object]]] = {}
+    for table, stream in FakeDataGenerator(facts, scenario.id, seed=42).walk(
+        {spec.name: spec.count}, resolver=resolver, translations={spec.name: translation}
+    ):
+        written[table.ref.display] = rows = list(stream)
+        resolver.remember(table, rows)
+    labels = written["catalog.tl_category"]
+    assert list(written) == ["catalog.tb_category", "catalog.tl_category"]
+    assert len({(row["fk_category"], row["fk_locale"]) for row in labels}) == len(labels) == 40
+
+
+covered(_MULTILINGUAL, "scenario_id: 0x5008", by=(_MULTILINGUAL, "CREATE SCHEMA catalog;"))
+
+
+@check(_MULTILINGUAL, "locales: [fr-FR, en-GB]")
+def _pseudo_locale(block: Block, context: Context) -> None:
+    """The keys load into the guide's scenario: two locales and the pseudo-locale."""
+    tables = "  - name: catalog.tb_category\n    count: 2\n    translations: catalog.tl_category\n"
+    path = context.tmp_path / "shop.yaml"
+    path.write_text(
+        f"scenario_id: 0x5008\nname: shop\nmode: read-back\n{block.text}\ntables:\n{tables}"
+    )
+    scenario = ScenarioManager(_facts(TRINITY, CODES)).load(path)
+    assert ([locale.code for locale in scenario.locales], scenario.pseudo_locale) == (
+        ["fr-FR", "en-GB"],
+        "qps-ploc",
+    )
+
+
+@check(_MULTILINGUAL, "from fraiseql_semis.translation import pseudo")
+def _pseudo_snapshot(block: Block, _context: Context) -> None:
+    exec(block.text, {})  # the page's own example, run as written
+
+
+def _covered_shop(context: Context, coverage: Block) -> tuple[ScenarioManager, Path]:
+    """The guide's schema, and its scenario declaring *coverage*'s locales."""
+    schema = next(b for b in BLOCKS if b.key == (_MULTILINGUAL, "CREATE SCHEMA catalog;"))
+    shop = next(
+        b for b in BLOCKS if b.document == _MULTILINGUAL and b.title == "scenarios/shop.yaml"
+    )
+    facts = _facts(schema.text, {"catalog.tb_category": 0x0D, "catalog.tl_category": 0x0E})
+    locales = re.sub(r"^locales:.*$", coverage.text, shop.text, count=1, flags=re.MULTILINE)
+    path = context.tmp_path / "shop.yaml"
+    path.write_text(locales + "\n")
+    return ScenarioManager(facts), path
+
+
+_COVERAGE = "locales: [fr-FR, en-GB, de-DE]"
+_GAPS = "catalog.tl_category: 20 rows × 4 locales, en-GB 4 missing, de-DE 20 missing"
+
+
+@check(_MULTILINGUAL, _COVERAGE)
+def _coverage(block: Block, context: Context) -> None:
+    """The keys, in the guide's scenario: the run's line is the page's."""
+    manager, path = _covered_shop(context, block)
+    assert manager.check(manager.load(path), no_pin=True)[1:] == (_GAPS,)
+
+
+covered(_MULTILINGUAL, _GAPS, by=(_MULTILINGUAL, _COVERAGE))
+
+
+@check(
+    _MULTILINGUAL, "SELECT count(*) FILTER (WHERE gb.label IS NULL) AS fell_back,", database=True
+)
+def _fallback(block: Block, context: Context) -> None:
+    """The guide's scenario applied with its coverage, then the fallback query, run as
+    written: what its last line says."""
+    url = context.database()
+    schema = next(b for b in BLOCKS if b.key == (_MULTILINGUAL, "CREATE SCHEMA catalog;"))
+    manager, path = _covered_shop(
+        context, next(b for b in BLOCKS if b.key == (_MULTILINGUAL, _COVERAGE))
+    )
+    with psycopg.connect(url) as connection:
+        connection.execute(_page_sql(schema.text))
+        connection.execute(
+            "INSERT INTO catalog.tb_locale (id, code) SELECT gen_random_uuid(), code "
+            "FROM unnest(ARRAY['fr-FR', 'en-GB', 'de-DE', 'qps-ploc']) AS code"
+        )
+        manager.apply(manager.load(path), connection=connection)
+        assert connection.execute(_page_sql(block.text)).fetchone() == (4, 0)
+    assert block.text.endswith(
+        "-- fell_back 4, unlabelled 0: four categories render in French on a British page"
+    )
+
+
+@check(_page("reference/semis-yaml.md"), "translations:")
+def _translation_rule(block: Block, context: Context) -> None:
+    """The block loads into the project's rule, whose template names tl_category for
+    tb_category, in its schema."""
+    (context.tmp_path / "schema.sql").write_text(TRINITY)
+    config = context.tmp_path / "semis.yaml"
+    config.write_text(f"schema: {{ddl: schema.sql}}\ntable_codes: {{}}\n{block.text}\n")
+    rule = Project.load(config).translations
+    assert (rule.label_column, rule.locale_fk, rule.locale_table) == (
+        "label",
+        "fk_locale",
+        ("public.tb_locale", "code"),
+    )
+    assert rule.table_for("catalog.tb_category") == "catalog.tl_category"
+
+
 @check("README.md", "- name: tenant.tb_organization")
 def _copied(block: Block, context: Context) -> None:
     """What the page says: twelve contacts over six organizations, each holding its own's
@@ -1197,14 +1394,21 @@ _quotes(
 
 
 def _spelled(target: Callable[..., object]) -> str:
-    """*target*'s parameters as Python spells a call's: ``a, *, b=None``."""
+    """*target*'s parameters as Python spells a call's: ``a, *, b=None``; a dataclass
+    field's default factory as the value it makes, ``c={}``."""
+    factories = {
+        field.name: field.default_factory
+        for field in (dataclasses.fields(target) if dataclasses.is_dataclass(target) else ())
+        if field.default_factory is not dataclasses.MISSING
+    }
     spelled: list[str] = []
     for parameter in inspect.signature(target).parameters.values():
         if parameter.name == "self":
             continue
         if parameter.kind is parameter.KEYWORD_ONLY and "*" not in spelled:
             spelled.append("*")
-        default = "" if parameter.default is parameter.empty else f"={parameter.default!r}"
+        value = factories[parameter.name]() if parameter.name in factories else parameter.default
+        default = "" if parameter.default is parameter.empty else f"={value!r}"
         spelled.append(parameter.name + default)
     return ", ".join(spelled)
 
@@ -1224,8 +1428,8 @@ for _first in (
     "TableCodes(mapping)",
     "FakeDataGenerator(facts, scenario_id, *, seed=None, locale='en_US', providers=None, identifier_column='identifier')",
     "seeds.write(path, table, rows, *, facts, mode, format=None)",
-    "ScenarioManager(facts, *, providers=None, libraries=(), staging=None)",
-    "Scenario(id, name, mode, tables, locale='en_US', seed=None, description='', pin=None, existing=())",
+    "ScenarioManager(facts, *, providers=None, libraries=(), staging=None, translations=None)",
+    "Scenario(id, name, mode, tables, locale='en_US', seed=None, description='', pin=None, existing=(), locales=(), pseudo_locale=None, coverage={})",
     "Project.load(path)",
     "Library(name, providers, rules=())",
 ):

@@ -138,3 +138,35 @@ def test_exclusive_lets_go_when_the_block_raises(monkeypatch: pytest.MonkeyPatch
 
 def test_the_lock_class_is_an_int4() -> None:
     assert -(2**31) <= readback.SEMIS_LOCK_CLASS < 2**31
+
+
+class _Selecting:
+    """A connection that records each statement, and answers it with no row."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(self, query: Any, _params: Any = None) -> Any:
+        self.statements.append(query.as_string())
+        return self
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return []
+
+
+def test_an_existing_read_selects_only_the_columns_it_is_asked_for() -> None:
+    """A table with no identifier and no uuid id reads its keys as 0.3.0 did: the
+    surrogate key alone, so a column it lacks is never named."""
+    ddl = "CREATE SCHEMA s; CREATE TABLE s.tb_unit (pk_unit BIGINT PRIMARY KEY, label TEXT);"
+    keys = SchemaFacts.from_source(ddl, table_codes=TableCodes({})).keys_for("s.tb_unit")
+    connection = _Selecting()
+    with pytest.raises(ResolutionError, match=r"existing s\.tb_unit holds no rows"):
+        readback.existing_rows(connection, keys, by=None, values=None, natural_id=None)  # type: ignore[arg-type]
+    assert connection.statements == ['SELECT "pk_unit" FROM "s"."tb_unit" ORDER BY "pk_unit"']
+
+
+def test_rows_named_by_values_need_the_column_that_names_them() -> None:
+    ddl = "CREATE SCHEMA s; CREATE TABLE s.tb_unit (pk_unit BIGINT PRIMARY KEY);"
+    keys = SchemaFacts.from_source(ddl, table_codes=TableCodes({})).keys_for("s.tb_unit")
+    with pytest.raises(ValueError, match="need the column that names them"):
+        readback.existing_rows(_Unreachable(), keys, by=None, values=["x"], natural_id=None)

@@ -68,7 +68,12 @@ same in a workflow that holds a secret or an identity.
 - **`semis pin --check`** fails when the scenario's `continents.pin.json` is not the pin
   the schema gives it: the schema moved, or the scenario was never pinned. It names what
   moved and writes nothing; `semis pin` on a laptop accepts the change, as a commit to
-  review.
+  review. For a prep-seed scenario with `existing:` tables, give it `-d` naming the
+  database the seeds are promoted into: it then also fails when a pinned row is gone or
+  its UUID changed, and passes, saying so, when a whole table only gained rows. What
+  promotion does with a stale UUID depends on the resolver's join, and is
+  [measured](/concepts/schema-pins/#rows-a-prep-seed-scenario-points-at): an inner join
+  drops the child silently, so run this check where the seeds are promoted.
 - **`semis validate`** fails when the schema has moved under the scenario's pin, naming
   each table and column that moved, whatever the schema's source, and when the scenario no longer fits the schema: a table gone, a parent
   missing from the run, a staging twin missing. It draws no rows.

@@ -15,6 +15,7 @@ from confiture.cli.dsn import resolve_database_url
 from confiture.config.environment import Environment
 from confiture.platform import (
     ColumnFacts,
+    ColumnReference,
     ConfigurationError,
     ConfiturError,
     Connection,
@@ -38,6 +39,7 @@ from fraiseql_semis.codes import TableCodes
 __all__ = [
     "CONFITURE_VERSION",
     "ColumnFacts",
+    "ColumnReference",
     "ConfigurationError",
     "ConfiturError",
     "Connection",

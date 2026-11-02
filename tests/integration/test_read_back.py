@@ -250,6 +250,37 @@ def test_an_empty_existing_table_is_refused_for_a_nullable_key_too(
         manager.execute(manager.load(path), tmp_path / "out", connection=connection)
 
 
+def test_existing_rows_are_read_with_their_identifier_and_id(
+    connection: psycopg.Connection,
+) -> None:
+    """In pk_* order for a whole table, in where: order for named rows."""
+    connection.execute(SEEDED)
+    keys = FACTS.keys_for(CONTINENT)
+    every = readback.existing_rows(connection, keys, by="identifier", values=None, natural_id="id")
+    named = readback.existing_rows(
+        connection, keys, by="identifier", values=["af", "eu"], natural_id="id"
+    )
+    ids = dict(connection.execute(f"SELECT identifier, id FROM {CONTINENT}").fetchall())
+    pks = dict(connection.execute(f"SELECT identifier, pk_continent FROM {CONTINENT}").fetchall())
+    assert every == [(pks[i], i, ids[i]) for i in ("eu", "as", "af")]
+    assert named == [(pks[i], i, ids[i]) for i in ("af", "eu")]
+
+
+def test_a_where_value_two_rows_share_is_refused(
+    connection: psycopg.Connection, tmp_path: Path
+) -> None:
+    """Which of the two a child points at would be arbitrary: neither is chosen."""
+    connection.execute(f"ALTER TABLE {CONTINENT} DROP CONSTRAINT tb_continent_identifier_key")
+    connection.execute(
+        f"INSERT INTO {CONTINENT} (id, identifier, name) VALUES (gen_random_uuid(), 'eu', 'Two')"
+    )
+    with pytest.raises(
+        ResolutionError,
+        match=rf"^scenario countries: existing {CONTINENT} has 2 rows whose identifier is 'eu'",
+    ):
+        _countries(connection, tmp_path, COUNTRIES + "    where: {identifier: [eu]}\n")
+
+
 @pytest.mark.parametrize("where", ["", "    where: {identifier: [eu]}\n"], ids=["all", "where"])
 def test_an_existing_table_the_database_does_not_hold_is_refused(
     connection: psycopg.Connection, tmp_path: Path, where: str

@@ -165,6 +165,29 @@ existing:
     where: {identifier: [fr, de, es]} # these rows, in this order
 ```
 
+In prep-seed, a child carries its parent's UUID, and a run reaches no database: `semis
+pin` reads the UUIDs of those rows once, from a database named on purpose, into the
+scenario's pin, and every run takes them from there, byte for byte. A pinned UUID is true
+of the database it was read from; when the DDL lets `gen_random_uuid()` fill it, every
+build gives a new one and the pin is stale after it, which `semis pin --check -d` in CI
+reports.
+
+```bash
+semis pin scenarios/customers.yaml -d postgresql:///shop_dev
+```
+
+```json
+"rows": {
+  "digest": "sha256:…",
+  "reads": [
+    {"table": "shop.tb_category", "by": "identifier", "where": null,
+     "rows": [["books", "…"], ["music", "…"]]},
+    {"table": "shop.tb_country", "by": "identifier", "where": ["fr", "de", "es"],
+     "rows": [["fr", "…"], ["de", "…"], ["es", "…"]]}
+  ]
+}
+```
+
 A nullable column that is not a key — a soft-delete or an audit column — is written
 `NULL` unless the scenario names it: by an override, by a provider for it, or under
 `fill:`, so a scenario with no overrides writes rows every view sees. The run names, per

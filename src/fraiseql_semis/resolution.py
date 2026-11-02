@@ -30,6 +30,10 @@ class Resolver(Protocol):
         """The parent row, 0-based, the last ``value_for`` pointed *table*'s FK *column* at."""
         ...
 
+    def locale_key(self, table: str, code: str) -> object:
+        """The value that points a translation row at the locale *code* of *table*."""
+        ...
+
 
 def natural_ids(table: TableFacts, rows: Sequence[Mapping[str, object]]) -> list[object]:
     """The natural id of each of *table*'s *rows*, in order; none when it has no natural id."""
@@ -45,6 +49,8 @@ class _RoundRobin:
         self._parents: dict[str, tuple[TableFacts | TableKeys, list[object]]] = {}
         self._next: dict[tuple[str, str], int] = {}
         self._last: dict[tuple[str, str], int] = {}
+        # Per locale table, each declared code's key: apart from the round-robin lists.
+        self._locales: dict[str, dict[str, object]] = {}
         # Tables whose keys were read, not learned from rows: no natural id is needed.
         self._read: set[str] = set()
 
@@ -52,6 +58,13 @@ class _RoundRobin:
         """*values* for *table*'s next rows: a hierarchy offers its rows level by level."""
         _, known = self._parents.setdefault(table.ref.display, (table, []))
         known.extend(values)
+
+    def existing(self, table: TableKeys, values: Sequence[object]) -> None:
+        """*values* for the rows *table* already holds, as parents later rows may point
+        at — their ``pk_*`` in read-back, their UUIDs in prep-seed — offered as a run's
+        own rows are, so children spread over them the same way."""
+        self._read.add(table.ref.display)
+        self._offer(table, list(values))
 
     def value_for(self, column: ColumnFacts, *, table: str) -> object:
         values = self._values(column, table)
@@ -62,6 +75,21 @@ class _RoundRobin:
 
     def pointed_at(self, column: ColumnFacts, *, table: str) -> int:
         return self._last[table, column.name]
+
+    def locales(self, table: str, keys: Mapping[str, object]) -> None:
+        """*keys*, each declared locale code's value in the locale *table* — its ``pk_*``
+        in read-back, its UUID in prep-seed — kept apart from the rows a foreign key to
+        *table* round-robins over, so a locale table also under ``existing:`` keeps both."""
+        self._locales.setdefault(table, {}).update(keys)
+
+    def locale_key(self, table: str, code: str) -> object:
+        known = self._locales.get(table, {})
+        if code not in known:
+            raise ResolutionError(
+                f"{table} holds no locale {code} for this run",
+                resolution_hint="Offer each declared locale's key before translations are drawn.",
+            )
+        return known[code]
 
     def value_at(self, column: ColumnFacts, *, table: str, row: int) -> object:
         values = self._values(column, table)
@@ -137,12 +165,6 @@ class ReadBackResolver(_RoundRobin):
                 ),
             )
         self._offer(table, list(found))
-
-    def existing(self, table: TableKeys, keys: Sequence[int]) -> None:
-        """*keys*, the ``pk_*`` of rows *table* already holds, as parents later rows may
-        point at: offered as learned keys are, so children spread over them the same way."""
-        self._read.add(table.ref.display)
-        self._offer(table, list(keys))
 
     @override
     def _check(self, column: ColumnFacts, table: str, parent: TableFacts | TableKeys) -> None:

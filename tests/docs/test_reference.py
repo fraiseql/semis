@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from typer.main import get_group
 
-from fraiseql_semis import TEXT_TYPES, errors, project, scenario
+from fraiseql_semis import TEXT_TYPES, errors, project, scenario_file
 from fraiseql_semis.cli import app
 from fraiseql_semis.providers import SHIPPED
 
@@ -79,16 +79,20 @@ def test_every_prep_seed_key_is_documented() -> None:
     assert _first_column("semis-yaml.md", "`prep_seed:`") == project._PREP_SEED_KEYS
 
 
+def test_every_translations_key_is_documented() -> None:
+    assert _first_column("semis-yaml.md", "`translations:`") == project._TRANSLATION_KEYS
+
+
 # The scenario file --------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     ("heading", "keys"),
     [
-        ("Scenario keys", scenario._SCENARIO_KEYS),
-        ("Table keys", scenario._TABLE_KEYS),
-        ("Hierarchy keys", scenario._HIERARCHY_KEYS),
-        ("Existing table keys", scenario._EXISTING_KEYS),
+        ("Scenario keys", scenario_file._SCENARIO_KEYS),
+        ("Table keys", scenario_file._TABLE_KEYS),
+        ("Hierarchy keys", scenario_file._HIERARCHY_KEYS),
+        ("Existing table keys", scenario_file._EXISTING_KEYS),
     ],
 )
 def test_every_scenario_key_is_documented(heading: str, keys: set[str]) -> None:

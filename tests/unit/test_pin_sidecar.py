@@ -7,6 +7,7 @@ import pytest
 
 from fraiseql_semis.codes import TableCodes
 from fraiseql_semis.errors import PinError, ScenarioError
+from fraiseql_semis.pin import digest
 from fraiseql_semis.scenario import ScenarioManager
 from fraiseql_semis.schema import SchemaFacts
 from tests.ddl import CODES, TRINITY
@@ -91,3 +92,36 @@ def test_read_pin_false_loads_unpinned_whatever_the_file_holds(tmp_path: Path) -
     path = _pinned(tmp_path)
     (tmp_path / "minimal_seed.pin.json").write_text("{not json")
     assert _manager().load(path, read_pin=False).pin is None
+
+
+def test_a_read_back_scenario_whose_pin_records_rows_is_refused(tmp_path: Path) -> None:
+    """Only a prep-seed run reads pinned rows: a read-back one with them changed mode."""
+    path = _pinned(tmp_path)
+    pin = tmp_path / "minimal_seed.pin.json"
+    document = json.loads(pin.read_text())
+    reads: list[object] = []
+    document["rows"] = {"digest": digest(reads), "reads": reads}
+    pin.write_text(json.dumps(document))
+    path.write_text(SCENARIO.replace("prep-seed", "read-back"))
+    manager = _manager()
+    scenario = manager.load(path)
+    with pytest.raises(ScenarioError) as refused:
+        manager.check(scenario)
+    assert str(refused.value).splitlines() == [
+        "scenario minimal_seed runs in read-back mode, and its pin records rows, which only "
+        "a prep-seed run reads: its mode changed since it was pinned",
+        "Hint: Re-take the pin with semis pin on the scenario.",
+    ]
+
+
+def test_a_schema_pin_block_in_a_scenario_with_no_name_names_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "minimal_seed.yaml"
+    path.write_text(
+        SCENARIO.replace("name: minimal_seed\n", "") + "schema_pin: {source: ddl, digest: x}\n"
+    )
+    with pytest.raises(ScenarioError) as refused:
+        _manager().load(path)
+    assert str(refused.value).splitlines()[0] == (
+        f"{path} keeps a schema_pin: block, where semis 0.2.0 kept its pin; the pin is now "
+        "<name>.pin.json, beside the scenario"
+    )

@@ -89,13 +89,13 @@ the caller's transaction.
 ## Scenarios
 
 ```python
-ScenarioManager(facts, *, providers=None, libraries=(), staging=None)
+ScenarioManager(facts, *, providers=None, libraries=(), staging=None, translations=None)
 ScenarioManager.load(path, *, read_pin=True)
 ScenarioManager.execute(scenario, out_dir, *, connection=None, format=None, no_pin=False)
 ScenarioManager.apply(scenario, out_dir=None, *, connection, format=None, no_pin=False)
 ScenarioManager.rehearse(scenario, *, connection=None, format=None, no_pin=False)
 ScenarioManager.reset(scenario, *, connection)
-ScenarioManager.pin(scenario, path, *, check=False)
+ScenarioManager.pin(scenario, path, *, check=False, connection=None)
 ScenarioManager.check(scenario, *, no_pin=False)
 ScenarioManager.validate(scenario, *, schema_dir, max_level=3, connection=None, catalog_schema=None, format=None, no_pin=False)
 ScenarioManager.validate_seeds(seeds_dir, *, schema_dir, max_level=3, connection=None, catalog_schema=None)
@@ -103,7 +103,9 @@ ScenarioManager.validate_seeds(seeds_dir, *, schema_dir, max_level=3, connection
 
 `ScenarioManager` loads scenarios against one schema, with a project's own `providers`,
 a mapping of names to providers, and its enabled `libraries`; a prep-seed scenario writes
-into `staging`'s twins. `load` reads a scenario file, refusing a malformed one with
+into `staging`'s twins, and `translations: true` names the table `translations`'s
+`TranslationRule(table, label_column, locale_fk, locale_table)` gives, as
+`Project.translations` holds it, the defaults when `semis.yaml` names none. `load` reads a scenario file, refusing a malformed one with
 `ScenarioError`, and the pin `<name>.pin.json` beside it keeps, when there is one, as
 the scenario's `pin`; with `read_pin=False` it loads it unpinned, whatever that file
 holds.
@@ -130,7 +132,10 @@ holds.
   the scenario file at `path`, as `semis pin` does, and returns a `PinChange`: the `path`,
   the schema's `pin`, the `previous` one the file kept, what `changes` moved between
   them, whether the pin `changed`, and whether the file was `written`. An unchanged pin
-  writes nothing, and with `check=True` nothing is written at all.
+  writes nothing, and with `check=True` nothing is written at all. A prep-seed
+  scenario's `existing:` rows are read on `connection`, which the caller rolls back, and
+  recorded with the pin; `PinChange` then also names the rows `stale`, `added` and
+  `missing`, and `wrong` says whether the seeds the previous pin gives are wrong.
 - `check` refuses what can be refused before a row is drawn: providers, the pin, the
   schema, each foreign key's parent and each hierarchy. It returns what the pin check did,
   then a line per table that leaves nullable columns `NULL`.
@@ -151,18 +156,23 @@ another may apply the same scenario holds `exclusive` around its transaction too
 `semis reset` does.
 
 ```python
-Scenario(id, name, mode, tables, locale='en_US', seed=None, description='', pin=None, existing=())
+Scenario(id, name, mode, tables, locale='en_US', seed=None, description='', pin=None, existing=(), locales=(), pseudo_locale=None, coverage={})
 ExistingTable(name, identifiers=None)
 Scenario.for_run(*, scenario_id=None, seed=None, locale=None)
 ```
 
 A scenario built in Python is refused as a loaded one is. `tables` is a tuple of
 `TableSpec(name, count, …)`, each schema-qualified table with its `overrides`,
-`providers`, `fill`, `trusts_trigger`, `hierarchy` and `copies`, as [the scenario
-file](/reference/scenario-file/) names them; `copies` maps a column to a
+`providers`, `fill`, `trusts_trigger`, `hierarchy`, `copies` and `translations`, as
+[the scenario file](/reference/scenario-file/) names them; `copies` maps a column to a
 `Copied(key, column)`, the foreign key and the parent column it copies. `existing` is a tuple of `ExistingTable`, the
-tables a read-back run takes parents from without writing them: every row, or those whose
-`identifier` is one of `identifiers`, in that order. `for_run` returns the scenario with
+tables a run takes parents from without writing them: every row, or those whose
+`identifier` is one of `identifiers`, in that order. `locales` is a tuple of
+`Locale(code, faker)`: a code of the locale table, and the Faker locale its translations
+are drawn in; `pseudo_locale` is the pseudo-locale's code, or `None`.
+`fraiseql_semis.translation.pseudo(text, length=None)` is the pseudo-locale's transform
+of a label, cut to `length` with both brackets kept, for a test that builds the label it
+expects. `for_run` returns the scenario with
 one run's overrides, and a line saying each.
 
 ```python

@@ -77,6 +77,40 @@ Where prep-seed scenarios write, and where confiture's levels find the resolvers
 | `schema_dir` | a directory | the `ddl:` directory, when the schema is read from one: the tree holding the resolvers, for `semis validate-seeds` |
 | `catalog_schema` | a schema name | none: a final table's fallback schema, passed to confiture only when named |
 
+## `translations:`
+
+How the project's translation tables are named, and the columns they use. Every key is
+optional, and a project whose schema follows the defaults writes no block.
+
+```yaml
+translations:
+  table: '{schema}.tl_{entity}'          # tb_category → tl_category, same schema
+  label_column: label
+  locale_fk: fk_locale
+  locale_table: public.tb_locale (code)  # optional: read from locale_fk's foreign key
+```
+
+| Key | Takes | Default |
+|---|---|---|
+| `table` | a template naming an entity's translation table, from `{entity}`, the entity's name without its `tb_` prefix, and `{schema}`, its schema | `{schema}.tl_{entity}`: `catalog.tb_category` → `catalog.tl_category`; a template with no `.` is in the entity's schema |
+| `label_column` | a column name | `label` |
+| `locale_fk` | a column name: the translation table's key to the locale table | `fk_locale` |
+| `locale_table` | `schema.table (column)`, the locale table and the column a locale is found by, as confiture writes it | the table `locale_fk`'s foreign key names, found by `code` |
+
+`locale_table:` names the code column, and must be the table `locale_fk`'s foreign key
+names: a run points the key at no other. The rule is configuration, not a schema fact,
+and is not pinned: a rule that makes a scenario write another table, or find a locale by
+another column, moves the pin, but one switching `label_column` or `locale_fk` between two
+columns the translation table already has changes the rows and not the pin, and shows in
+review as the `semis.yaml` diff. semis reads no `db/project.yaml`: the same keys, written
+here.
+
+A scenario's `translations: true` writes into the table the template names; a table a
+scenario names under `translations:` is written as named. When the template names a
+table the schema lacks, `translations: true` is refused, naming the rule. A template
+without `{entity}`, with another placeholder, or with `{schema}` after its dot is refused, as is a value that is not a string, or a `locale_table` not written
+`schema.table (column)`.
+
 ## From Python
 
 `semis.yaml` loads into `fraiseql_semis.Project`, and a tool that drives semis from Python

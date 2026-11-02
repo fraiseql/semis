@@ -182,3 +182,46 @@ COPIES_CODES = {
     "tenant.tb_organization": 0x0708090A,
     "tenant.tb_contact": 0x08090A0B,
 }
+
+# A translated entity: categories, their labels per locale in tl_category, and the locale
+# table the schema's DDL fills, read by its code.
+TRANSLATED = """
+CREATE SCHEMA catalog;
+
+CREATE TABLE catalog.tb_locale (
+    pk_locale BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL UNIQUE,
+    code TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE catalog.tb_category (
+    pk_category BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL UNIQUE,
+    name VARCHAR(50) NOT NULL
+);
+
+CREATE TABLE catalog.tl_category (
+    fk_category BIGINT NOT NULL REFERENCES catalog.tb_category (pk_category),
+    fk_locale BIGINT NOT NULL REFERENCES catalog.tb_locale (pk_locale),
+    label VARCHAR(80) NOT NULL,
+    UNIQUE (fk_category, fk_locale)
+);
+
+CREATE SCHEMA prep_seed;
+
+CREATE TABLE prep_seed.tb_category (
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL,
+    name VARCHAR(50)
+);
+
+CREATE TABLE prep_seed.tl_category (
+    fk_category_id UUID,
+    fk_locale_id UUID,
+    label VARCHAR(80)
+);
+"""
+
+TRANSLATED_CODES = {"catalog.tb_category": 0x0D0E0F10, "catalog.tl_category": 0x0E0F1011}

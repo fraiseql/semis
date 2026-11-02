@@ -43,17 +43,9 @@ from fraiseql_semis.cli.options import (
 from fraiseql_semis.errors import ProjectError, ScenarioError, SemisError
 from fraiseql_semis.project import Project
 from fraiseql_semis.readback import exclusive, transaction
-from fraiseql_semis.scenario import (
-    Deleted,
-    Run,
-    Scenario,
-    ScenarioEntry,
-    ScenarioManager,
-    catalogue,
-    shared_ids,
-    single_table,
-)
-from fraiseql_semis.scenario import init_scenario as new_scenario
+from fraiseql_semis.scenario import Deleted, Run, Scenario, ScenarioManager, single_table
+from fraiseql_semis.scenario_file import ScenarioEntry, catalogue, shared_ids
+from fraiseql_semis.scenario_file import init_scenario as new_scenario
 from fraiseql_semis.schema import ConfiturError
 from fraiseql_semis.seeds import PrepSeedReport
 from fraiseql_semis.uuid_generator import SemanticUUIDGenerator
@@ -224,21 +216,33 @@ def pin(
     database_url: DatabaseUrl = None,
     check: PinCheck = False,
 ) -> None:
-    """Take a scenario's schema pin into <name>.pin.json beside it, and say what moved."""
+    """Take a scenario's schema pin into <name>.pin.json beside it, and say what moved.
+
+    A prep-seed scenario's existing rows are read from the database, in a transaction
+    rolled back: its URL must be one given on purpose, not an ambient DATABASE_URL.
+    """
     project = _require(config)
     manager = project.manager(database_url=database_url)
     loaded = manager.load(scenario, read_pin=False)
-    change = manager.pin(loaded, scenario, check=check)
+    url = None
+    if manager.reads_rows(loaded):
+        url = project.find_database_url(database_url, mutating=True)
+    with nullcontext() if url is None else transaction(url, commit=False) as connection:
+        change = manager.pin(loaded, scenario, check=check, connection=connection)
     if not change.changed:
         typer.echo(f"{change.path} is unchanged")
         return
-    if change.changes:
+    moved = (*change.changes, *change.stale, *change.missing, *change.added)
+    if moved:
         typer.echo("What moved:")
-        for line in change.changes:
+        for line in moved:
             typer.echo(f"  {line}")
-    if check:
+    if check and change.wrong:
         typer.echo(f"{change.path} would change: run semis pin on the scenario to accept it")
         raise typer.Exit(1)
+    if check:
+        typer.echo(f"{change.path} lacks rows, and none it holds is wrong: semis pin adds them")
+        return
     typer.echo(
         f"wrote {change.path}: scenario {loaded.name} is pinned "
         f"({change.pin.source} {change.pin.digest})"

@@ -182,6 +182,11 @@ drawing no rows: each table exists and has a code, each foreign key's parent is 
 run or left `NULL`, each hierarchy fits its table, each provider is registered, and in
 prep-seed each staging twin exists.
 
+After the pin's line, `validate`, `seeds` and `apply` print a line per table that leaves
+nullable columns `NULL`, then one per translation table whose `coverage:` leaves labels
+out, naming each locale that misses some:
+`catalog.tl_category: 20 rows × 4 locales, en-GB 4 missing, de-DE 20 missing`.
+
 | Argument or option | Takes | Description |
 |---|---|---|
 | `SCENARIO` | a file | The scenario's YAML file. Required. |
@@ -199,15 +204,24 @@ When the schema moved, it prints what moved, as a refused run names it, then rew
 the file. A pin file that does not read is replaced. The scenario file itself is never
 written. See [Schema pins](/concepts/schema-pins/).
 
-With `--check`, nothing is written: it exits 1 when the file would change, the schema
-having moved or the scenario never been pinned, saying what moved, and 0 when it would
-not. A CI job runs it to fail on a pin nobody accepted.
+For a prep-seed scenario with `existing:` tables, the pin also records the rows it
+points at: each row's `identifier`, when the table has one, and its UUID, read from the
+database in a transaction rolled back. The database must be named on purpose, by
+`--database-url`, `CONFITURE_DATABASE_URL` or the project's `env:`: an ambient
+`DATABASE_URL` alone is refused, since the UUIDs become a reviewed file. A whole table's
+rows keep the order they were first pinned in, and the rows it gains are appended.
+
+With `--check`, nothing is written. It exits 1 when the seeds the pin gives would be
+wrong: the schema moved, a pinned row is gone or its UUID changed, the pin lacks a
+table the scenario reads, or the scenario was never pinned. It exits 0, saying so, when
+a whole table only gained rows, and 0 when nothing would change. A CI job runs it to fail
+on a pin nobody accepted.
 
 | Argument or option | Takes | Description |
 |---|---|---|
 | `SCENARIO` | a file | The scenario's YAML file. Required. |
 | `--config`, `-c` | a file | The project file. Default: `./semis.yaml`. |
-| `--database-url`, `-d` | a URL | The database a `database:` schema is read from. See [the database URL](#the-database-url). |
+| `--database-url`, `-d` | a URL | The database a `database:` schema, and a prep-seed scenario's existing rows, are read from. See [the database URL](#the-database-url). |
 | `--check` | | Write nothing; exit 1 if the pin would change, for CI. |
 
 ## semis validate-seeds

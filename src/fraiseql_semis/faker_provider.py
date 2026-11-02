@@ -172,11 +172,14 @@ class FakerProvider:
         locale: str = "en_US",
         seed: int | None = None,
         registry: CustomProviderRegistry | None = None,
+        used: dict[tuple[str, str], set[object]] | None = None,
     ) -> None:
         self.faker = Faker(locale)
         self.faker.seed_instance(seed)
         self._registry = registry or CustomProviderRegistry()
-        self._used: dict[tuple[str, str], set[object]] = {}
+        # The values each unique column has used, per (table, column): *used*, when the
+        # providers of one run's locales share it, so a value is never drawn twice.
+        self._used: dict[tuple[str, str], set[object]] = {} if used is None else used
 
     def value_for(self, column: ColumnFacts, *, table: str) -> object:
         """A value for *column* of the qualified *table*."""

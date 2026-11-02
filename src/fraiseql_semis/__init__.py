@@ -49,16 +49,14 @@ from fraiseql_semis.scenario import (
     PinChange,
     Run,
     Scenario,
-    ScenarioEntry,
     ScenarioManager,
     TableSpec,
     Validation,
-    catalogue,
-    init_scenario,
-    shared_ids,
     single_table,
 )
+from fraiseql_semis.scenario_file import ScenarioEntry, catalogue, init_scenario, shared_ids
 from fraiseql_semis.schema import ColumnFacts, SchemaFacts, TableFacts
+from fraiseql_semis.translation import Locale
 from fraiseql_semis.uuid_generator import SemanticUUIDGenerator, UUIDFields
 
 __version__ = version("fraiseql-semis")
@@ -77,6 +75,7 @@ __all__ = [
     "Hierarchy",
     "IncomparablePinError",
     "Library",
+    "Locale",
     "Paths",
     "PinChange",
     "PinError",

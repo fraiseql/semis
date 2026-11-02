@@ -13,7 +13,7 @@ from fraiseql_semis.cli import app, main
 from fraiseql_semis.cli.main import _masked, _where
 from fraiseql_semis.errors import UnreachableDatabaseError
 from fraiseql_semis.readback import checked_url
-from tests.ddl import TRINITY
+from tests.ddl import TRANSLATED, TRANSLATED_CODES, TRINITY
 
 runner = CliRunner()
 
@@ -917,3 +917,45 @@ def test_pin_check_fails_on_an_unpinned_scenario_and_writes_no_pin(tmp_path: Pat
     result = _pin_check(_project(tmp_path, minimal_seed=SCENARIO))
     pin = tmp_path / "scenarios" / "minimal_seed.pin.json"
     assert (result.exit_code, pin.exists()) == (1, False)
+
+
+COVERED = """\
+scenario_id: 0x5008
+name: minimal_seed
+mode: read-back
+seed: 42
+locales: [fr-FR, en-GB, de-DE]
+pseudo_locale: qps-ploc
+coverage: {fr-FR: 1, en-GB: 0.8, de-DE: 0}
+tables:
+  - name: catalog.tb_category
+    count: 20
+    translations: catalog.tl_category
+"""
+
+
+def test_validate_counts_the_labels_coverage_leaves_out(tmp_path: Path) -> None:
+    """In the words of confiture's coverage check; a locale missing none is not named."""
+    config = _project(tmp_path, ddl=TRANSLATED.split("CREATE SCHEMA prep_seed;")[0])
+    codes = "".join(f"  {table}: {code:#x}\n" for table, code in TRANSLATED_CODES.items())
+    config.write_text(SEMIS_YAML + codes)
+    (tmp_path / "scenarios" / "covered.yaml").write_text(COVERED)
+    result = runner.invoke(
+        app, ["validate", str(tmp_path / "scenarios" / "covered.yaml"), "-c", str(config)]
+    )
+    assert result.output.splitlines()[1] == (
+        "catalog.tl_category: 20 rows × 4 locales, en-GB 4 missing, de-DE 20 missing"
+    )
+
+
+def test_validate_prints_no_coverage_line_for_a_table_missing_no_label(tmp_path: Path) -> None:
+    config = _project(tmp_path, ddl=TRANSLATED.split("CREATE SCHEMA prep_seed;")[0])
+    codes = "".join(f"  {table}: {code:#x}\n" for table, code in TRANSLATED_CODES.items())
+    config.write_text(SEMIS_YAML + codes)
+    (tmp_path / "scenarios" / "covered.yaml").write_text(
+        COVERED.replace("en-GB: 0.8, de-DE: 0", "en-GB: 1")
+    )
+    result = runner.invoke(
+        app, ["validate", str(tmp_path / "scenarios" / "covered.yaml"), "-c", str(config)]
+    )
+    assert "missing" not in result.output

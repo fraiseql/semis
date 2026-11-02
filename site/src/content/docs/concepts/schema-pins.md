@@ -105,6 +105,46 @@ scenario continents is valid: 2 tables, 28 rows, prep-seed
 
 There is no setting that turns the check off for good.
 
+## Rows a prep-seed scenario points at
+
+A pinned UUID is true of the database it was read from, and stays true elsewhere only if
+the reference rows' UUIDs are fixed: written as literals in the DDL, or derived from
+something that is. When the DDL lets `gen_random_uuid()` fill them, every build gives new
+UUIDs, and the pin is stale after each one. A prep-seed scenario with `existing:` tables
+points at such rows by UUID, so `semis pin` records them, with `-d` naming the database
+they are read from, in a `rows` section beside the facts:
+
+```json
+"rows": {
+  "digest": "sha256:…",
+  "reads": [
+    {"table": "shop.tb_category", "by": "identifier", "where": null,
+     "rows": [["books", "…"], ["music", "…"]]},
+    {"table": "shop.tb_country", "by": "identifier", "where": ["fr", "de", "es"],
+     "rows": [["fr", "…"], ["de", "…"], ["es", "…"]]}
+  ]
+}
+```
+
+Each read is a table and the column its rows are named by, `identifier` when the table
+has one; each row, that value and the UUID. The `pk_*` integers are not recorded: prep-seed
+writes none. A whole table's rows keep the order they were first pinned in, and the rows
+it gains are appended; rows `where:` names are taken in its order. The rows have a digest
+of their own: the facts digest still says what semis reads of the schema.
+
+A run cannot check rows: prep-seed reaches no database. `semis pin --check -d`, against
+the database the seeds are promoted into, does: it exits 1 when a pinned row is gone or its
+UUID changed, since the seeds would point at a row that is not there, and 0 when a whole
+table only gained rows. What promotion does with a stale UUID is the project's resolver's
+to decide, and is measured (`tests/contract/test_prep_seed_existing_promotion.py`): an
+inner join drops the child, and confiture's level 5 reports nothing; a left join writes
+`NULL`, which level 5 reports as `CRITICAL NULL_FK_AFTER_RESOLUTION`, or, into a NOT NULL
+key, fails, reported as `ERROR MISSING_FK_TRANSFORMATION`. A read-back scenario's pin
+records no rows: read-back reads them live. A prep-seed scenario with translations
+records its locale table as one more read, by `code`, the declared locales in their
+order; and every pin of a scenario with translations projects the locale table's `code`
+column with the facts, so renaming it moves the pin.
+
 ## What the digest holds
 
 The digest covers the facts semis reads, and nothing else. For each table of the

@@ -1,6 +1,6 @@
 # PRD: fraiseql-semis
 
-**Status**: 0.3.0
+**Status**: 0.4.0
 **Reads with**: [ARCHITECTURE.md](./ARCHITECTURE.md) (how it is built, and why),
 [../README.md](../README.md) (how it is used)
 
@@ -124,6 +124,9 @@ UUIDFields(table_code=33752069, scenario_id=20481, version=1, sequence=66)
    installable libraries enabled by a short name. No scenario string is evaluated.
 9. **Validation.** `semis validate` checks a scenario against the schema and its pin
    without drawing a row; `semis validate-seeds` runs confiture's five prep-seed levels.
+10. **Translations.** A scenario declares the locales its translated tables are written
+    in: one translation row per entity row and locale, each label drawn in its locale,
+    its locale key the locale's row — read in read-back, pinned in prep-seed.
 
 ### Non-functional
 
@@ -142,9 +145,9 @@ UUIDFields(table_code=33752069, scenario_id=20481, version=1, sequence=66)
 
 ## Success metrics
 
-| Metric | Target | Measured for 0.3.0 |
+| Metric | Target | Measured for 0.4.0 |
 |---|---|---|
-| Generation rate | 10,000 rows/s | 55,000 rows/s |
+| Generation rate | 10,000 rows/s | 54,000 rows/s |
 | 100,000 rows written and applied | under 2 minutes | 10 s |
 | Referential integrity of generated data | 100% | every FK points at a row of the run, a row an `existing:` table holds, or is a `NULL` the scenario declares or the run names |
 

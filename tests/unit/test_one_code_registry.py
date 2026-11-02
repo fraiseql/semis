@@ -15,6 +15,8 @@ OWNER = "codes.py"
 # longer flags anything is stale and fails.
 EXEMPT: dict[str, str] = {
     "pin.py": "hashes the schema facts a scenario reads into its pin; it derives no code",
+    "translation.py": "hashes a run's seed, a table and a locale into that locale's Faker seed; "
+    "it derives no code",
 }
 
 _HASHING_MODULES = {"hashlib", "zlib", "binascii"}

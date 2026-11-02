@@ -83,10 +83,12 @@ composes DDL, and never emits an `INSERT` or a `COPY` block by hand; each is one
 | `resolution.py` | The two FK modes, over `ColumnFacts.foreign_key` | — |
 | `staging.py` | `Staging` — the twin a prep-seed run writes into (§5) | — |
 | `hierarchy.py` | `Hierarchy` — a self-referencing table's tree, breadth-first (§5) | — |
+| `translation.py` | `Translation`, `TranslationTable`, the pseudo-locale's transform and coverage's choice of rows — a scenario's translation rows (§5) | — |
 | `emit.py` | A run in a declared mode: walked, written, and in read-back applied and learned | — |
 | `pin.py` | `SchemaPin` — the digest a scenario's pin records, its projection, and what moved (§8) | — |
 | `pin_file.py` | `<name>.pin.json` beside a scenario: where it lives, read and written (§8) | the file system |
-| `scenario.py` | `Scenario`, `TableSpec`, `ScenarioManager`, YAML loading | — |
+| `scenario.py` | `Scenario`, `TableSpec`, `ScenarioManager` — a run, checked, executed, applied, reset or pinned | — |
+| `scenario_file.py` | A scenario's YAML read into a `Scenario`; the catalogue of a directory's scenarios; `init_scenario` | the file system |
 | `project.py` | `Project` — `semis.yaml`: the schema source, the table codes, the scenarios directory, the providers, the staging schema | — |
 | `errors.py` | semis' own exceptions and their codes | — |
 | `cli/` | The `semis` command | — |
@@ -143,7 +145,8 @@ nothing is a failure:
    drifts, and every UUID semis ever wrote is a hostage to it.
 
 Everything under `generator.py`, `rows.py`, `faker_provider.py`, `resolution.py`,
-`hierarchy.py`, `staging.py`, `pin.py`, `uuid_generator.py`, `codes.py` and `providers/`
+`hierarchy.py`, `staging.py`, `translation.py`, `pin.py`, `uuid_generator.py`, `codes.py` and
+`providers/`
 is pure: facts in, values out, no database and no file
 system. That is what lets the row contract be tested against a DDL string with no
 PostgreSQL anywhere.
@@ -241,7 +244,10 @@ resolver copies across. A twin the schema lacks is refused before a row is drawn
 lacking a column the rows carry is refused before its file is written.
 
 No database is needed to generate. `semis seeds` is a pure file-producing command, and
-its output is byte-reproducible.
+its output is byte-reproducible from its files: the scenario and its pin. A table under
+`existing:` is pointed at by the UUIDs its rows carry in the database, which the pin
+records when `semis pin -d` reads them (§8, D41): a child takes them round-robin, in the
+order read-back would.
 
 Confiture validates the pattern at five levels through `validate_seeds`; levels 1–3 are
 static, 4–5 run the resolvers against a database in a transaction they roll back.
@@ -271,8 +277,10 @@ This is the only SQL in the package: taking a scenario's lock before an apply (D
 asking whether its rows are already applied (D34); for a reset (D40), deleting them,
 counting what a table keeps and restarting the identity of one it empties, and before
 that locking the tables that reference the run's and counting their rows pointing at the
-scenario's — a run table narrowed to the rows outside its own range; reading the keys of an existing table's rows, every one or those `where:` names
-(D36); learning keys; and setting a hierarchy's paths from them (below):
+scenario's — a run table narrowed to the rows outside its own range; reading an existing
+table's rows (D36), every one or, with the `WHERE` as `<where>`, those `where:` names,
+selecting its `pk_*` and only the columns asked for; learning keys; and setting a
+hierarchy's paths from them (below):
 
 ```sql
 SELECT pg_advisory_xact_lock(%s, %s)
@@ -281,20 +289,32 @@ SELECT EXISTS (SELECT FROM <schema>.<table> WHERE <natural_id> BETWEEN %s AND %s
 
 DELETE FROM <schema>.<table> WHERE <natural_id> BETWEEN %s AND %s
 
+DELETE FROM <schema>.<table> AS t USING <parent_schema>.<parent> AS p
+  WHERE t.<key> = p.<parent_column> AND p.<natural_id> BETWEEN %s AND %s
+
 SELECT count(*) FROM <schema>.<table>
 
 LOCK TABLE <tables> IN SHARE MODE
 
 SELECT count(*) FROM <schema>.<table> AS r WHERE EXISTS (SELECT FROM <target_schema>.<target>
-  AS t WHERE <t.key = r.key> AND t.<natural_id> BETWEEN %s AND %s)
+  AS t WHERE <t.key = r.key> AND <scoped>)
+
+t.<natural_id> BETWEEN %s AND %s
+
+EXISTS (SELECT FROM <parent_schema>.<parent> AS p
+  WHERE p.<parent_column> = t.<key> AND p.<natural_id> BETWEEN %s AND %s)
 
 AND (r.<own_natural_id> BETWEEN %s AND %s) IS NOT TRUE
 
+AND NOT EXISTS (SELECT FROM <parent_schema>.<parent> AS q
+  WHERE q.<parent_column> = r.<key> AND q.<own_natural_id> BETWEEN %s AND %s)
+
 ALTER TABLE <schema>.<table> ALTER COLUMN <identity> RESTART, …
 
-SELECT <surrogate_pk> FROM <schema>.<table> ORDER BY <surrogate_pk>
+SELECT <surrogate_pk>[, <identifier>][, <natural_id>] FROM <schema>.<table><where> ORDER BY <surrogate_pk>
 
-SELECT <identifier>, <surrogate_pk> FROM <schema>.<table> WHERE <identifier> = ANY(%s)
+WHERE <identifier> = ANY(%s)
+
 
 SELECT <surrogate_pk>, <natural_id> FROM <schema>.<table> WHERE <natural_id> = ANY(%s)
 
@@ -310,11 +330,27 @@ transaction; the lock is taken on a connection of its own, held until that trans
 ends (D37).
 
 A table the schema's own DDL fills — reference rows — is read, not generated: a
-read-back scenario lists it under `existing:`, and before the first table is drawn its
-keys are read and offered to the resolver as learned keys are, so children spread over
-them the same way. It needs no table code, since semis encodes no UUID for it, and the
-pin covers its keys. Prep-seed refuses it: a child would carry its parent's UUID, and
-rows semis did not write have none it can know.
+scenario lists it under `existing:`, and before the first table is drawn its rows are
+offered to the resolver as a run's own are, so children spread over them the same way.
+It needs no table code, since semis encodes no UUID for it, and the pin covers its keys.
+Read-back reads their keys from the database. Prep-seed reaches no database, so a child,
+which carries its parent's UUID, takes the UUIDs the scenario's pin recorded: `semis pin
+-d` reads them once, on purpose, and every run reads them from the pin file (D41).
+
+### Translations: one row per entity row and locale
+
+A scenario's `locales:` names the locale table's codes, and a table's `translations:`
+its translation table (D42). For each row of the table, in order, the run writes one row
+per locale into the translation table, which joins the run's tables and which
+`dependency_order` places after its entity. Its entity key takes its entity's row by
+position (`value_at`), and its locale key the locale's key, from a `code → key` map the
+resolver keeps per locale table, apart from the rows `existing:` keys round-robin over.
+In read-back, the locale table is read by its `code` before the first table is drawn; in
+prep-seed, each code's UUID comes from the pin's `rows` (D41). Every value of a
+translation row is drawn from its locale's own provider, one per declared locale a run,
+reseeded per translation table; the scenario's provider draws none of it. A
+pseudo-locale (D44) adds a last row per entity, its label the first locale's transformed.
+A locale's `coverage:` (D45) then leaves some rows out: each is drawn, and not written.
 
 ### Hierarchies: a table that references itself
 
@@ -470,6 +506,13 @@ Reproducibility is the product. What holds:
   on the UUID. A read-back seed file is an artifact of a run, not
   a reviewable document.
 
+A translation row's values come from its locale's provider, seeded with the first 8 bytes
+of a sha256 over `[seed, translation table, code]`: adding `locales:` leaves every entity
+row byte-identical, and adding a locale or a translated table moves no other locale's
+values. Its sequence is `entity sequence × 256 + slot`, the slot the locale's place in
+`locales:` (1 to 254, 255 kept), so appending a locale moves no UUID, and every sequence
+lies in the translation table's `scenario_bounds`.
+
 ### Replaying a scenario is refused
 
 A scenario applied twice into one database collides on its own encoded values, because the
@@ -566,8 +609,10 @@ The projection holds, per scenario table in `dependency_order`: the table's disp
 `raw_sql_type`, `not_null`, `default`, `unique`, `checks`, `enum_values` and the FK's
 `(table, column)`; for a prep-seed scenario, then, each staging twin's columns the same
 way, or its absence; then each `existing:` table's `surrogate_pk` and `natural_id`, and
-the columns that name its rows — its natural id and its `identifier` — the same way. It
-holds nothing else.
+the columns that name its rows — its natural id and its `identifier` — the same way, and
+a locale table's `code` column too, in one entry even when it is also under `existing:`.
+A translation table is a written table, projected as one. It holds nothing else; a
+scenario without translations projects as 0.3.0 did.
 
 Two consequences, both measured, both wanted:
 
@@ -575,6 +620,16 @@ Two consequences, both measured, both wanted:
   alter a generated row does not invalidate a scenario.
 - **Adding `NOT NULL` to a written column moves the pin.** A change that can alter a
   generated row — or make one refusable under §6 — does.
+
+For a prep-seed scenario with `existing:` tables, the pin also records the rows the
+scenario points at, in a `rows` section beside the facts, digested on its own (D41): one
+read per table and the column its rows are named by — `identifier` when the table has
+one — each row as that value and its UUID, never its `pk_*`. A whole table's rows keep the
+order they were first pinned in and append what they gain; rows `where:` names are taken
+in its order. A run cannot check rows, since prep-seed reaches no database: `semis pin
+--check -d`, against the database the seeds are promoted into, fails on a pinned row gone
+or re-identified, and passes, saying so, on rows added. A read-back scenario's pin records
+no rows, and one that does is refused.
 
 On replay: same source kind and same digest, the run proceeds. Different digest, it is
 refused, and semis reports what moved by comparing the projection the pin kept with the
@@ -680,7 +735,7 @@ semis does not:
 | D7 | The writer follows the mode — prep-seed writes INSERT, read-back writes COPY; `--format` overrides | measured (#366) |
 | D8 | semis hands `apply_seeds` an explicit file list, never a directory | measured (#374) |
 | D9 | `readback.py` holds the only `psycopg` import and the only SQL semis writes: the lock, the already-applied check, an existing table's keys, the key read-back, a hierarchy's path `UPDATE`, and the reset's lock, check, `DELETE` and identity restart (§5) | this document; amended by the owner, 2026-09-23, 2026-10-05 and 2026-10-07 |
-| D10 | Determinism is stated per mode: prep-seed is byte-reproducible, read-back is not | measured |
+| D10 | Determinism is stated per mode: prep-seed is byte-reproducible from its files — the scenario and its pin, existing rows' UUIDs included — read-back is not | measured; amended 2026-10-08 (D41) |
 | D11 | Confiture's exceptions propagate unwrapped; semis adds its own for its own failures | this document |
 | D12 | The command is `semis`, the package's own name | `pyproject.toml` |
 | D13 | A schema is read by `from_source` (DDL) or `from_env` (an environment's build), never one constructor taking both | measured |
@@ -691,8 +746,8 @@ semis does not:
 | D18 | A self-FK other than the declared parent is written `NULL` when nullable, and refused when NOT NULL | owner, 2026-09-23 |
 | D19 | Read-back applies and learns a hierarchy level by level, one seed file per level; prep-seed writes it as one file | owner, 2026-09-23 |
 | D20 | A hierarchy's `ltree` path is `pk_*`-labelled, set in read-back by an `UPDATE` per level joined on the UUID; prep-seed refuses `path:` | owner, 2026-09-23, measured |
-| D21 | The command connects by confiture's own #152 URL precedence, imported from `confiture.cli.dsn` (off `platform`) and pinned by a contract test; a command that writes refuses the ambient `DATABASE_URL` alone | owner, 2026-09-23 |
-| D22 | A project file, `semis.yaml`, names the schema source, the table codes (inline or a file of their own) and the scenarios directory; it loads into a public `Project` another tool can build in Python | owner, 2026-09-23 |
+| D21 | The command connects by confiture's own #152 URL precedence, imported from `confiture.cli.dsn` (off `platform`) and pinned by a contract test; a command that writes refuses the ambient `DATABASE_URL` alone, and so does `semis pin` reading a prep-seed scenario's rows, whose UUIDs become a reviewed file | owner, 2026-09-23; amended 2026-10-08 (D41) |
+| D22 | A project file, `semis.yaml`, names the schema source, the table codes (inline or a file of their own), the scenarios directory and the translation rule; it loads into a public `Project` another tool can build in Python | owner, 2026-09-23; amended 2026-10-08 (D43) |
 | D23 | The scenario files are the scenario-id registry: `decode-uuid` scans them, and an id two files use is reported | owner, 2026-09-23 |
 | D24 | `apply` is one transaction, committed at the end; `--dry-run` on read-back runs it and rolls back | owner, 2026-09-23 |
 | D25 | `semis.yaml` names the providers: a shipped library by name, a project's own as `module:attribute`, imported and never evaluated; an enabled library draws the columns its rules match by name and type, after a scenario's `providers:` and an enum, before the built-ins | owner, 2026-09-23 |
@@ -706,11 +761,16 @@ semis does not:
 | D33 | A nullable value column is written `NULL` unless the scenario names it: an override, a provider registered for it by name, or the table's `fill:` (`all`: every one); a library rule matching it does not name it, and the run names the columns it left `NULL` | owner, 2026-10-05 (fraiseql/semis#1) |
 | D34 | A scenario applies once, to a reset database: `apply` refuses a database holding any row in the scenario's UUID range of a table it writes into (in prep-seed, its twin too), skipping a table with no `id` column or whose `id` is not a uuid, before anything is written, naming `semis apply --reset` and `semis reset`, which delete exactly the scenario's rows (D40); no upsert | owner, 2026-10-05 (fraiseql/semis#4); amended 2026-10-07 (D40) |
 | D35 | A pin keeps the projection it digested, for every source, and a refusal names what moved by comparing it with the schema's. It is one file beside the scenario, `<name>.pin.json`, written only by `semis pin`, which rewrites it only when it moved and loads the scenario without reading it; a scenario keeping a 0.2.0 `schema_pin:` block or its facts file is refused with the hint to run `semis pin` | owner, 2026-10-05 (fraiseql/semis#5); amended 2026-10-07: out of the scenario |
-| D36 | Read-back takes parents from rows already in the database, listed under `existing:`: every row in `pk_*` order, or those `where: {identifier: [...]}` names, in that order; no table code needed, the pin covering their keys; prep-seed refuses it | owner, 2026-10-05 (fraiseql/semis#2) |
+| D36 | Read-back takes parents from rows already in the database, listed under `existing:`: every row in `pk_*` order, or those `where: {identifier: [...]}` names, in that order; no table code needed, the pin covering their keys; in prep-seed, by the UUIDs the pin records (D41); a `where:` value two rows share is refused | owner, 2026-10-05 (fraiseql/semis#2); amended 2026-10-08 |
 | D37 | One apply of a scenario at a time: `semis apply` takes `pg_advisory_xact_lock(SEMIS_LOCK_CLASS, <scenario id>)` — the two-`int4` form, semis' class `0x5E3115` first, so its keys cannot meet another application's single-`bigint` ones — on a connection of its own, before the already-applied check, and holds it until the run's transaction ends: a second apply waits, then is refused once the first commits, or proceeds once it rolls back. `ScenarioManager` takes no lock on a caller's connection; a Python caller takes it with `readback.exclusive` | owner, 2026-10-06 |
 | D38 | A nullable foreign key to another table whose parent the run lacks — not in it, in it with `count: 0`, and not under `existing:` — is written `NULL` and named in the run's line of columns it leaves `NULL`, not refused: the run can write it nothing else, and says so, as D33 does for a value column. A NOT NULL key so placed is refused; an `existing:` table with no rows is refused, since listing it asks for its rows | owner, 2026-10-07 |
 | D39 | A column may copy a column of the row its foreign key points at, by a per-table `copies: {column: fk_column.parent_column}`, in both modes: the key is the table's own, drawn by semis, to another table the run writes (an `existing:` table's columns are not read); the parent column one whose value semis knows when its row is drawn; both of one `type_key`, never cast; a key left `NULL` copies `NULL`, refused into a NOT NULL column. A key, not an override: an override stays a value or a list of them, leaving a mapping free for a `jsonb` value. The facts and the pin are unchanged | owner, 2026-10-07 |
-| D40 | `semis reset` deletes the scenario's rows by the range D34's check reads — each table the run writes into, and in prep-seed each twin, never an `existing:` one — children first, one `DELETE` per table, a self-referencing one included; never `TRUNCATE`, never `CASCADE`. A table the delete leaves empty has its identity columns restarted, so a table the scenario owns alone re-applies byte-identical, as after `TRUNCATE … RESTART IDENTITY`; one that keeps other rows keeps its sequence, and the report says so. A table with no uuid natural id cannot be scoped, and is refused before anything is deleted. A row the scenario did not write that points at one it did is refused too, whatever its key's `ON DELETE`, so no cascade reaches a row semis did not write: the keys are those confiture's `introspect` reads from every schema of the database, so §2 and D1 hold, and the referencing tables are locked `SHARE` until the transaction ends. `semis apply --reset` resets, then applies, in one transaction behind one lock, so a failed apply keeps the first run's rows | owner, 2026-10-07; confiture over `pg_constraint`, 2026-10-08 |
+| D40 | `semis reset` deletes the scenario's rows by the range D34's check reads — each table the run writes into, and in prep-seed each twin, never an `existing:` one — children first, one `DELETE` per table, a self-referencing one included; never `TRUNCATE`, never `CASCADE`. A table the delete leaves empty has its identity columns restarted, so a table the scenario owns alone re-applies byte-identical, as after `TRUNCATE … RESTART IDENTITY`; one that keeps other rows keeps its sequence, and the report says so. A table with no uuid natural id cannot be scoped, and is refused before anything is deleted — but a translation table, whose rows are the scenario's when their entity key points at one of its entity rows: a `DELETE … USING` its entity in the final table, a range on `<entity key>_id` in the twin. A row the scenario did not write that points at one it did is refused too, whatever its key's `ON DELETE`, so no cascade reaches a row semis did not write: the keys are those confiture's `introspect` reads from every schema of the database, so §2 and D1 hold, and the referencing tables are locked `SHARE` until the transaction ends. `semis apply --reset` resets, then applies, in one transaction behind one lock, so a failed apply keeps the first run's rows | owner, 2026-10-07; confiture over `pg_constraint`, 2026-10-08; amended 2026-10-08 (D42) |
+| D41 | A prep-seed scenario may list `existing:` tables: `semis pin -d` reads the UUIDs of the rows it points at, read-only and from a database named on purpose, into the pin's `rows` section, and every run takes them from there, reaching no database. A whole table keeps its pinned order and appends what it gains; `semis pin --check` fails when the seeds would be wrong (the facts moved, a pinned row gone or re-identified, a read missing), not when a table only gained rows. A prep-seed scenario whose pin does not cover its reads, or with an existing table that has no uuid id, is refused by check and runs, never by `load` | owner, 2026-10-08 |
+| D42 | A scenario's `locales:` lists the locale table's codes, each with a Faker locale derived or given, apart from `locale:`; a table's `translations:` writes one row per row and locale into its translation table, whose entity key, `fk_locale`, `label` and the locale table's `code` are found by name. The locale key comes from a per-table `code → key` map, read by code in read-back and pinned in prep-seed; every value from its locale's provider, one per declared locale a run, reseeded per table by sha256 over `[seed, table, code]`, one unique store shared; a translation row's sequence is `entity sequence × 256 + slot` | owner, 2026-10-07; amended 2026-10-08 |
+| D43 | `semis.yaml`'s `translations:` states a project's translation rule once — the table template (`{schema}.tl_{entity}`, a template with no schema in the entity's), `label_column`, `locale_fk` and `locale_table` in confiture's `schema.table (column)` form — each defaulting to D42's names; a scenario opts a table in with `translations: true`, and a named table overrides the template, not the columns. semis reads no `db/project.yaml`; the rule is not pinned | owner, 2026-10-07; amended 2026-10-08 |
+| D44 | A scenario's `pseudo_locale:` writes each entity one more translation row, last, at slot 255, built from its first locale's row: the label alone transformed — each ASCII letter onto one of 52 distinct Latin Extended Additional letters, 40% longer, bracketed, cut to its column with the brackets kept, no randomness — a unique non-label column drawn afresh, every other value copied; a collision under a unique key is refused naming both labels | owner, 2026-10-07; amended 2026-10-08 |
+| D45 | A scenario's `coverage:` gives a declared locale, or the pseudo-locale, a share `c` from 0 to 1, read exactly from its decimal: of a translated table's `n` entity rows, `⌊n × c⌋` keep its label, the first by a sha256 over the JSON `[scenario id, translation table, code, entity sequence]`, so gaps ignore the seed, each locale misses its own, and raising `c` only adds rows; a change of `count` may re-pick them. Every row is drawn, then the rows left out are not written, so the rest keep their labels and UUIDs; the run prints, per table with gaps, `tl_x: n rows × k locales, <code> m missing`, in the words of confiture's proposed coverage check (fraiseql/confiture#657), which semis neither runs nor reads | owner, 2026-10-07 |
 
 ### On the UUID encoding's own arithmetic (D6)
 

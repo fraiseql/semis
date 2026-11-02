@@ -5,14 +5,25 @@ Pure: facts in, rows out — no database and no file system.
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Literal, NamedTuple, TypeGuard, cast
 
-from fraiseql_semis.errors import ResolutionError, ScenarioError
+from fraiseql_semis.errors import ResolutionError, RowContractError, ScenarioError
 from fraiseql_semis.faker_provider import CustomProviderRegistry, FakerProvider
 from fraiseql_semis.hierarchy import Hierarchy
 from fraiseql_semis.resolution import Resolver, require_parents, unparented
-from fraiseql_semis.rows import require_row
+from fraiseql_semis.rows import declared_length, require_row
 from fraiseql_semis.schema import ColumnFacts, SchemaFacts, TableFacts
+from fraiseql_semis.translation import (
+    PSEUDO_SLOT,
+    Locale,
+    Translation,
+    TranslationTable,
+    kept,
+    pseudo,
+    seed_for,
+    sequence,
+)
 from fraiseql_semis.uuid_generator import SemanticUUIDGenerator
 
 type Row = dict[str, object]
@@ -105,7 +116,16 @@ class FakeDataGenerator:
     ) -> None:
         self._facts = facts
         self._uuids = SemanticUUIDGenerator(scenario_id)
+        self._scenario_id = scenario_id
+        self._seed = seed
+        self._registry = providers
         self._values = FakerProvider(locale=locale, seed=seed, registry=providers)
+        # Per declared locale code, the provider its translations draw from, made once a
+        # run; and the values their unique columns used, shared across the locales.
+        self._locale_values: dict[str, FakerProvider] = {}
+        self._locale_used: dict[tuple[str, str], set[object]] = {}
+        # Per translated table, its rows' sequences, which its translations' derive from.
+        self._sequences: dict[str, list[int]] = {}
         self._identifier_column = identifier_column
         # Per table, per unique column: the values this run has emitted.
         self._seen: dict[str, dict[str, set[object]]] = {}
@@ -128,8 +148,13 @@ class FakeDataGenerator:
         resolver: Resolver | None = None,
         existing: frozenset[str] = frozenset(),
         copies: Mapping[str, Mapping[str, Copied]] | None = None,
+        translations: Mapping[str, Translation] | None = None,
     ) -> Iterator[tuple[TableFacts, Iterator[Row]]]:
         """Each table of *counts* with its rows, parents before children.
+
+        *translations* maps a table to its translation table and the locales it is
+        written in: one row per row of the table and locale, after it, each drawn in its
+        locale, its locale key the resolver's ``locale_key``.
 
         *counts* maps a qualified table to its row count; *trusted* maps a table to its
         ``trusts_trigger`` columns, *overrides* to its overridden columns, *fill* to the
@@ -143,6 +168,17 @@ class FakeDataGenerator:
         its end before asking for the next. A hierarchy is yielded once per level, roots
         first, for the same reason: its children are its own rows.
         """
+        translations = translations or {}
+        translated = {written.table.table: written for written in translations.values()}
+        counts = {
+            **counts,
+            **{
+                written.table.table: counts[entity] * len(written.locales)
+                for entity, written in translations.items()
+            },
+        }
+        existing = existing | {written.table.locale_table for written in translations.values()}
+        self._sequences = {entity: [] for entity in translations}
         order = [ref.display for ref in self._facts.insert_order(counts)]
         hierarchies = hierarchies or {}
         plan = _Plan(
@@ -156,6 +192,9 @@ class FakeDataGenerator:
         )
         resolved: dict[str, dict[str, _Copy]] = {}
         for table in order:
+            if table in translated:
+                require_parents(self._facts.facts_for(table), counts, existing=existing)
+                continue
             given = (overrides or {}).get(table, {})
             _check_overrides(self._facts.facts_for(table), given, counts[table])
             self._check_fill(
@@ -189,6 +228,7 @@ class FakeDataGenerator:
             fill=fill or {},
             hierarchies=hierarchies,
             copies=resolved,
+            translations=translated,
             resolver=resolver,
         )
 
@@ -203,10 +243,22 @@ class FakeDataGenerator:
         fill: Mapping[str, Fill],
         hierarchies: Mapping[str, Hierarchy],
         copies: Mapping[str, Mapping[str, _Copy]],
+        translations: Mapping[str, Translation],
         resolver: Resolver | None,
     ) -> Iterator[tuple[TableFacts, Iterator[Row]]]:
         for table in order:
             table_facts = self._facts.facts_for(table)
+            if table in translations:
+                yield (
+                    table_facts,
+                    self._translated(
+                        table_facts,
+                        translations[table],
+                        unparented=unparented[table],
+                        resolver=resolver,
+                    ),
+                )
+                continue
             hierarchy = hierarchies.get(table)
             count = counts[table]
             levels = [range(count)] if hierarchy is None else hierarchy.levels(count)
@@ -226,6 +278,191 @@ class FakeDataGenerator:
                         resolver=resolver,
                     ),
                 )
+
+    def _translated(
+        self,
+        table_facts: TableFacts,
+        translation: Translation,
+        *,
+        unparented: frozenset[str],
+        resolver: Resolver | None,
+    ) -> Iterator[Row]:
+        """*translation*'s rows: for each row of its entity, in order, one per locale, in
+        ``locales:`` order. Each draws from its locale's provider, reseeded for this
+        table, and takes the sequence its entity row's and its slot give."""
+        written, display = translation.table, table_facts.ref.display
+        columns = {column.name: column for column in table_facts.columns}
+        left_null = self._left_null(
+            table_facts,
+            {},
+            fill=frozenset({written.label}),
+            omitted=frozenset(),
+            unparented=unparented,
+        )
+        drawn = []
+        for locale in translation.locales:
+            provider = self._locale_provider(locale)
+            provider.faker.seed_instance(seed_for(self._seed, written.table, locale.code))
+            drawers = {
+                column.name: (
+                    _null if column.name in left_null else provider.drawer(column, table=display)
+                )
+                for column in table_facts.columns
+            }
+            drawn.append((locale, provider, drawers))
+        return self._draw_translations(
+            table_facts,
+            written,
+            drawn,
+            entity_key=columns[written.entity_key],
+            left_null=left_null,
+            resolver=resolver,
+            pseudo_code=translation.pseudo,
+            coverage=translation.coverage,
+        )
+
+    def _draw_translations(  # noqa: PLR0913 — the table positionally; how it is drawn by keyword
+        self,
+        table_facts: TableFacts,
+        written: TranslationTable,
+        drawn: list[tuple[Locale, FakerProvider, Mapping[str, Callable[[], object]]]],
+        *,
+        entity_key: ColumnFacts,
+        left_null: frozenset[str],
+        resolver: Resolver | None,
+        pseudo_code: str | None = None,
+        coverage: Mapping[str, Fraction],
+    ) -> Iterator[Row]:
+        """Every row is drawn, and a row *coverage* leaves out is then not yielded, so the
+        rows written keep the labels and UUIDs they have at full coverage."""
+        display = table_facts.ref.display
+        seen = self._seen.setdefault(display, {})
+        look_up = _resolver(resolver, entity_key, display)
+        sources: dict[object, object] = {}
+        entities = self._sequences[written.entity]
+        codes = [locale.code for locale, _, _ in drawn]
+        codes += [pseudo_code] if pseudo_code is not None else []
+        written_for = {
+            code: kept(entities, share, scenario=self._scenario_id, table=written.table, code=code)
+            for code in codes
+            if (share := coverage.get(code)) is not None
+        }
+
+        def keeps(code: str, entity: int) -> bool:
+            return code not in written_for or entity in written_for[code]
+
+        for row_number, entity in enumerate(entities):
+            parent = look_up.value_at(entity_key, table=display, row=row_number)
+            first: Row = {}
+            for slot, (locale, provider, drawers) in enumerate(drawn, start=1):
+                given = {
+                    written.entity_key: parent,
+                    written.locale_key: look_up.locale_key(written.locale_table, locale.code),
+                }
+                row = self._row(
+                    table_facts,
+                    given,
+                    None,
+                    trusted=frozenset(),
+                    left_null=left_null,
+                    copied=frozenset(),
+                    resolver=resolver,
+                    drawers=drawers,
+                    words=provider.word,
+                    sequence=sequence(entity, slot),
+                )
+                self._accepted(table_facts, row, trusted=frozenset(), seen=seen)
+                first = first or dict(row)
+                if keeps(locale.code, entity):
+                    yield row
+            if pseudo_code is not None:
+                row = self._pseudo_row(
+                    table_facts,
+                    written,
+                    first,
+                    drawn[0][2],
+                    locale_key=look_up.locale_key(written.locale_table, pseudo_code),
+                    sequence=sequence(entity, PSEUDO_SLOT),
+                    sources=sources,
+                )
+                self._accepted(table_facts, row, trusted=frozenset(), seen=seen)
+                if keeps(pseudo_code, entity):
+                    yield row
+
+    def _pseudo_row(  # noqa: PLR0913 — the table and its default row positionally; the rest by keyword
+        self,
+        table_facts: TableFacts,
+        written: TranslationTable,
+        default: Row,
+        drawers: Mapping[str, Callable[[], object]],
+        *,
+        locale_key: object,
+        sequence: int,
+        sources: dict[object, object],
+    ) -> Row:
+        """The pseudo-locale's row of an entity: its *default* row, the first locale's,
+        with its own UUID and slug, the pseudo-locale's key, its label transformed, and
+        any other unique column drawn afresh from the first locale's *drawers*.
+
+        A pseudo label has no randomness to draw again: one that another label of the
+        table already is, under a unique key, is refused, naming both."""
+        display = table_facts.ref.display
+        encoded = self._uuids.generate(table_facts.table_code, sequence=sequence)
+        fields = SemanticUUIDGenerator.decode(encoded)
+        row: Row = {**default, written.locale_key: locale_key}
+        natural_id = table_facts.natural_id
+        if natural_id is not None and natural_id in row:
+            row[natural_id] = encoded
+        if self._identifier_column in row:
+            word = str(default[self._identifier_column]).rsplit("-", 2)[0]
+            row[self._identifier_column] = f"{word}-{fields.scenario_id:x}-{fields.sequence:x}"
+        own = {
+            table_facts.natural_id,
+            self._identifier_column,
+            written.entity_key,
+            written.locale_key,
+        }
+        for column in table_facts.columns:
+            if column.name == written.label:
+                label = pseudo(str(default[written.label]), length=declared_length(column))
+                if column.unique:
+                    self._unique_pseudo(
+                        display, column.name, label, default[written.label], sources
+                    )
+                row[column.name] = label
+            elif column.unique and column.name in row and column.name not in own:
+                row[column.name] = drawers[column.name]()
+        return row
+
+    def _unique_pseudo(
+        self, table: str, column: str, label: str, source: object, sources: dict[object, object]
+    ) -> None:
+        """Refuse *label*, the pseudo label of *source*, when *table*'s unique *column*
+        already holds it; else remember it, as a drawn value is."""
+        used = self._locale_used.setdefault((table, column), set())
+        if label in used:
+            other = sources.get(label)
+            said = (
+                f"the pseudo labels of {other!r} and {source!r} are both {label!r}"
+                if other is not None
+                else f"the pseudo label of {source!r}, {label!r}, is another row's label"
+            )
+            raise RowContractError(
+                f"{table}.{column}: {said}",
+                resolution_hint="Widen the label column, or drop pseudo_locale:.",
+            )
+        used.add(label)
+        sources[label] = source
+
+    def _locale_provider(self, locale: Locale) -> FakerProvider:
+        """The provider *locale*'s translations draw from: one per declared code a run,
+        sharing the run's registry and one store of used values."""
+        found = self._locale_values.get(locale.code)
+        if found is None:
+            found = self._locale_values[locale.code] = FakerProvider(
+                locale=locale.faker, registry=self._registry, used=self._locale_used
+            )
+        return found
 
     def generate_rows(  # noqa: PLR0913 — table and count positionally; the rest by keyword
         self,
@@ -572,13 +809,24 @@ class FakeDataGenerator:
             )
             for name, copy in copies.items():
                 row[name] = self._copied(table_facts.ref.display, row, copy, resolver)
-            require_row(table_facts, row, trusted=omitted, seen=seen)
-            for column in table_facts.columns:
-                if column.unique and row.get(column.name) is not None:
-                    seen.setdefault(column.name, set()).add(row[column.name])
+            self._accepted(table_facts, row, trusted=omitted, seen=seen)
             for name, values in kept.items():
                 values.append(row.get(name))
             yield row
+
+    @staticmethod
+    def _accepted(
+        table_facts: TableFacts,
+        row: Row,
+        *,
+        trusted: frozenset[str],
+        seen: dict[str, set[object]],
+    ) -> None:
+        """Refuse *row* when the row contract does, then remember its unique values."""
+        require_row(table_facts, row, trusted=trusted, seen=seen)
+        for column in table_facts.columns:
+            if column.unique and row.get(column.name) is not None:
+                seen.setdefault(column.name, set()).add(row[column.name])
 
     def _copied(self, table: str, row: Row, copy: _Copy, resolver: Resolver | None) -> object:
         """*copy*'s parent column in the row *table*'s *row* points at; ``NULL`` when its
@@ -599,13 +847,18 @@ class FakeDataGenerator:
         copied: frozenset[str],
         resolver: Resolver | None,
         drawers: Mapping[str, Callable[[], object]],
+        words: Callable[[], str] | None = None,
+        sequence: int | None = None,
     ) -> Row:
         """One row. *points_at* names a hierarchy's parent column and the row it points at;
         every other self-FK, and a root's parent, is ``NULL``. A column in *copied* holds
         its place, for the caller to copy into once the row's keys are drawn. *drawers*
         draws each column a provider fills, chosen once for the table."""
-        encoded = self._uuids.generate(table.table_code)
+        encoded = self._uuids.generate(table.table_code, sequence=sequence)
         fields = SemanticUUIDGenerator.decode(encoded)
+        if table.ref.display in self._sequences:
+            self._sequences[table.ref.display].append(fields.sequence)
+        word = words or self._values.word
         row: Row = {}
         for column in table.columns:
             if column.name == table.natural_id:
@@ -615,9 +868,7 @@ class FakeDataGenerator:
             elif column.name in copied:
                 row[column.name] = None
             elif column.name == self._identifier_column:
-                row[column.name] = (
-                    f"{self._values.word()}-{fields.scenario_id:x}-{fields.sequence:x}"
-                )
+                row[column.name] = f"{word()}-{fields.scenario_id:x}-{fields.sequence:x}"
             elif column.default is not None or column.name in trusted:
                 continue
             elif column.name in left_null:

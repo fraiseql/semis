@@ -1,5 +1,6 @@
 """semis.yaml: the schema, the table codes and the scenarios a project's commands read."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from fraiseql_semis.project import Project, ProjectSchema
 from fraiseql_semis.providers import SHIPPED
 from fraiseql_semis.schema import ConfigurationError, SchemaFacts
 from fraiseql_semis.staging import Staging
+from fraiseql_semis.translation import TranslationRule
 from tests.ddl import CODES, TRINITY
 from tests.unit import fake_providers
 
@@ -409,3 +411,74 @@ def test_a_project_file_that_does_not_read_as_yaml_is_refused(tmp_path: Path) ->
     with pytest.raises(ProjectError) as refused:
         Project.load(path)
     assert str(refused.value).splitlines()[0].startswith(f"{path} does not read as YAML: ")
+
+
+def test_a_translations_block_loads_into_the_projects_rule(tmp_path: Path) -> None:
+    block = (
+        "translations:\n  table: 'i18n.tl_{entity}'\n  label_column: name\n"
+        "  locale_fk: fk_language\n  locale_table: public.tb_language (iso)\n"
+    )
+    project = Project.load(_project(tmp_path, SEMIS_YAML + block))
+    assert project.translations == TranslationRule(
+        table="i18n.tl_{entity}",
+        label_column="name",
+        locale_fk="fk_language",
+        locale_table=("public.tb_language", "iso"),
+    )
+
+
+def test_no_translations_block_gives_the_defaults(tmp_path: Path) -> None:
+    rule = Project.load(_project(tmp_path)).translations
+    assert (rule.table, rule.label_column, rule.locale_fk, rule.locale_table, rule.code) == (
+        "{schema}.tl_{entity}",
+        "label",
+        "fk_locale",
+        None,
+        "code",
+    )
+
+
+@pytest.mark.parametrize(
+    ("block", "said"),
+    [
+        ("translations:\n  labels: name\n", "translations:: unknown key labels"),
+        ("translations:\n  label_column: 3\n", "translations: label_column: is a column name"),
+        (
+            "translations: [label]\n",
+            "translations: maps table, label_column, locale_fk and locale_table",
+        ),
+        ("translations:\n  table: 'tl_category'\n", "translations: table: names no {entity}"),
+        (
+            "translations:\n  table: 'tl_{entity}_{lang}'\n",
+            "translations: table: names no {entity}",
+        ),
+        (
+            "translations:\n  table: 'i18n.{schema}_tl_{entity}'\n",
+            "translations: table: names no {entity}",
+        ),
+        (
+            "translations:\n  table: '{schema}.{schema}_{entity}'\n",
+            "translations: table: names no {entity}",
+        ),
+        ("translations:\n  table: 'tl_{entity'\n", "translations: table: names no {entity}"),
+        (
+            "translations:\n  locale_table: public.tb_locale\n",
+            "translations: locale_table: is schema.table (column), e.g. public.tb_locale (code)",
+        ),
+    ],
+    ids=[
+        "unknown",
+        "not-a-string",
+        "not-a-mapping",
+        "no-entity",
+        "other-placeholder",
+        "schema-after-dot",
+        "schema-twice",
+        "unbalanced",
+        "locale-table",
+    ],
+)
+def test_a_malformed_translations_block_is_refused(tmp_path: Path, block: str, said: str) -> None:
+    path = _project(tmp_path, SEMIS_YAML + block)
+    with pytest.raises(ProjectError, match=rf"^{re.escape(str(path))}: {re.escape(said)}"):
+        Project.load(path)

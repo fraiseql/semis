@@ -93,20 +93,32 @@ SELECT EXISTS (SELECT FROM <schema>.<table> WHERE <natural_id> BETWEEN %s AND %s
 
 DELETE FROM <schema>.<table> WHERE <natural_id> BETWEEN %s AND %s
 
+DELETE FROM <schema>.<table> AS t USING <parent_schema>.<parent> AS p
+  WHERE t.<key> = p.<parent_column> AND p.<natural_id> BETWEEN %s AND %s
+
 SELECT count(*) FROM <schema>.<table>
 
 LOCK TABLE <tables> IN SHARE MODE
 
 SELECT count(*) FROM <schema>.<table> AS r WHERE EXISTS (SELECT FROM <target_schema>.<target>
-  AS t WHERE <t.key = r.key> AND t.<natural_id> BETWEEN %s AND %s)
+  AS t WHERE <t.key = r.key> AND <scoped>)
+
+t.<natural_id> BETWEEN %s AND %s
+
+EXISTS (SELECT FROM <parent_schema>.<parent> AS p
+  WHERE p.<parent_column> = t.<key> AND p.<natural_id> BETWEEN %s AND %s)
 
 AND (r.<own_natural_id> BETWEEN %s AND %s) IS NOT TRUE
 
+AND NOT EXISTS (SELECT FROM <parent_schema>.<parent> AS q
+  WHERE q.<parent_column> = r.<key> AND q.<own_natural_id> BETWEEN %s AND %s)
+
 ALTER TABLE <schema>.<table> ALTER COLUMN <identity> RESTART, …
 
-SELECT <surrogate_pk> FROM <schema>.<table> ORDER BY <surrogate_pk>
+SELECT <surrogate_pk>[, <identifier>][, <natural_id>] FROM <schema>.<table><where> ORDER BY <surrogate_pk>
 
-SELECT <identifier>, <surrogate_pk> FROM <schema>.<table> WHERE <identifier> = ANY(%s)
+WHERE <identifier> = ANY(%s)
+
 
 SELECT <surrogate_pk>, <natural_id> FROM <schema>.<table> WHERE <natural_id> = ANY(%s)
 
@@ -135,9 +147,41 @@ existing:
 Their keys are read before the first table is drawn, by the second and third queries
 above. An existing table needs no table code, and the scenario's pin covers its keys. The
 assignment depends on the rows the database holds: the same rows and the same seed give
-the same assignment. A table with no rows, or a `where:` value no row matches, is refused,
-naming the table. Prep-seed refuses `existing:`: a child carries its parent's UUID, and
-rows semis did not write have none it can know.
+the same assignment. A table with no rows, a `where:` value no row matches, or one two rows share, is refused,
+naming the table.
+
+In prep-seed, a child carries its parent's UUID, which rows semis did not write have in
+the database alone. `semis pin -d` reads them once, from a database named on purpose, and
+records them in the scenario's pin; every prep-seed run takes them from there, reaching no
+database, byte for byte. A child points at them round-robin, in the order read-back would:
+
+```bash
+semis pin scenarios/customers.yaml -d postgresql:///shop_dev
+```
+
+```json
+"rows": {
+  "digest": "sha256:…",
+  "reads": [
+    {"table": "shop.tb_category", "by": "identifier", "where": null,
+     "rows": [["books", "…"], ["music", "…"]]},
+    {"table": "shop.tb_country", "by": "identifier", "where": ["fr", "de", "es"],
+     "rows": [["fr", "…"], ["de", "…"], ["es", "…"]]}
+  ]
+}
+```
+
+A prep-seed scenario whose pin records none of a table's rows is refused before a row is
+drawn, with the hint to run `semis pin -d`. See
+[Schema pins](/concepts/schema-pins/#rows-a-prep-seed-scenario-points-at) for what makes
+such a pin stale.
+
+### Translations' locale key
+
+A translation row's locale key points at its locale's row, found by the locale table's
+`code`: in read-back, each declared code's `pk_*` is read before the first table is
+drawn; in prep-seed, each code's UUID is the one the scenario's pin records, which
+`semis pin -d` reads. See [Multilingual scenarios](/guides/multilingual/).
 
 ## In either mode
 

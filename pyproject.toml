@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fraiseql-semis"
-version = "0.3.0"
+version = "0.4.0"
 description = "Semantic UUID-encoded fake data generator for PostgreSQL trinity pattern schemas"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -112,6 +112,8 @@ select = [
 ignore = [
     "E501",  # line length is the formatter's call, not the linter's
 ]
+# The coverage line counts "20 rows × 4 locales", in the words of confiture's check.
+allowed-confusables = ["×"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [

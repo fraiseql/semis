@@ -1,0 +1,18 @@
+scenario_id: 0x5030
+name: compat
+mode: read-back
+seed: 42
+existing:
+  - name: semis_compat.tb_continent
+    where: {identifier: [asia, europe]}
+tables:
+  - name: semis_compat.tb_country
+    count: 4
+    fill: [note]
+  - name: semis_compat.tb_city
+    count: 8
+    overrides:
+      kind: live
+  - name: semis_compat.tb_location
+    count: 7
+    hierarchy: {parent: fk_parent_location, roots: 1, fan_out: 2}

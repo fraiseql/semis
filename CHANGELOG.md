@@ -6,6 +6,65 @@ All notable changes to fraiseql-semis are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-02
+
+A scenario writes its entities' translations: one label per declared locale, a
+pseudo-locale, and gaps left on purpose, so the code that picks a label by locale and
+falls back is tested on data. A prep-seed scenario may now point at existing rows, by
+the UUIDs its pin records. The release is additive, which tests show: a 0.3.0 pin
+verifies unchanged, and a 0.3.0 read-back scenario writes the same bytes. There is no
+"Upgrading" section. The one change of behaviour, a `where:` value two rows share, is
+under Changed.
+
+### Added
+
+- **Translations** (fraiseql/semis#6): a scenario's `locales:` lists the locale table's
+  codes, and a table's `translations:` names its translation table. For each row, the run
+  writes one translation row per locale, its entity key the row, its `fk_locale` the
+  locale's row — read by `code` in read-back, from the pin in prep-seed — and its `label`
+  and every other value drawn from that locale's own seeded Faker, so adding `locales:`
+  changes no other row. A translation table with a uuid `id` takes `entity sequence ×
+  256 + slot`, so appending a locale changes no UUID; one without is reset through its
+  entity. Every shape semis cannot write, and a code with no Faker locale, no row or two,
+  is refused naming the table. `Scenario.locales` is a tuple of `Locale(code, faker)`.
+- **A pseudo-locale**: `pseudo_locale:` names one more locale code, and each entity
+  gets a last translation row, at slot 255, whose label is the first locale's
+  transformed — every letter marked, 40% longer, bracketed (`Category` →
+  `[Ḉḁṭḕḡṓṙẏ ···]`), cut to its column with the brackets kept. Only the label is
+  transformed. `fraiseql_semis.translation.pseudo` is the transform, for snapshot tests.
+- **A project's translation rule in `semis.yaml`**: `translations:` names the
+  translation table's template (`{schema}.tl_{entity}`), `label_column`, `locale_fk` and
+  `locale_table` (`schema.table (column)`), each defaulting to the names above, and a
+  scenario's `translations: true` writes into the table the rule names. From Python,
+  `Project.translations` is a `TranslationRule`.
+- **Coverage leaves labels out on purpose**: `coverage: {en-GB: 0.8}` writes `en-GB`
+  labels for exactly `⌊n × 0.8⌋` of each translated table's `n` rows, the pseudo-locale
+  included when named. Which rows lack one is ranked by a sha256 over the scenario, the
+  table, the locale and the row, so it ignores `seed:` and raising coverage only adds
+  rows. Every label is still drawn, so the rows written keep their labels and UUIDs. The
+  run prints `catalog.tl_category: 20 rows × 4 locales, en-GB 4 missing`.
+
+- **A prep-seed scenario may list `existing:` tables**: a child points at their rows by
+  the UUIDs the scenario's pin records, round-robin in read-back's order, and a run still
+  reaches no database and stays byte-reproducible from its files. `semis pin -d` records
+  them; a prep-seed scenario whose pin records none of a table's rows, or whose existing
+  table has no uuid `id`, is refused by `semis validate` and every run, with the hint to
+  run `semis pin -d`.
+
+### Changed
+
+- **A prep-seed pin records the existing rows its scenario points at**: `semis pin -d`
+  reads them, in a transaction rolled back, from a database named on purpose, and
+  `<name>.pin.json` keeps a `rows` section of each row's `identifier` and UUID, with a
+  digest of its own. A whole table's rows keep the order first pinned and append the
+  rows it gains. `semis pin --check` now fails when the seeds would be wrong — the facts
+  moved, a pinned row is gone or its UUID changed, a read is missing — and passes, saying
+  so, when a whole table only gained rows. A read-back scenario's pin records no rows,
+  and one that does is refused: its mode changed since it was pinned.
+- **A `where:` value two rows of an `existing:` table share is refused**, naming the
+  table, the column and the value: which of the two a child pointed at was arbitrary.
+  Give the rows distinct identifiers, or drop the shared value from `where:`.
+
 ## [0.3.0] - 2026-10-08
 
 semis carries what a scenario did by hand on 0.2.0: a nullable key with no parent, a
@@ -313,6 +372,8 @@ The first release.
   prints, and requires fraiseql-confiture 1.27, whose `CONFIG_003` refusal of a
   `--database-url` no longer repeats the password either.
 
-[Unreleased]: https://github.com/fraiseql/semis/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/fraiseql/semis/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/fraiseql/semis/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/fraiseql/semis/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/fraiseql/semis/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/fraiseql/semis/releases/tag/v0.1.0

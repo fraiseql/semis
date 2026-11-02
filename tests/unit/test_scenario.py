@@ -14,10 +14,9 @@ from fraiseql_semis.scenario import (
     Scenario,
     ScenarioManager,
     TableSpec,
-    catalogue,
-    init_scenario,
     single_table,
 )
+from fraiseql_semis.scenario_file import catalogue, init_scenario
 from fraiseql_semis.schema import SchemaFacts
 from tests.ddl import CODES, CONTRACT, CONTRACT_CODES, HIERARCHY, HIERARCHY_CODES, TRINITY
 
@@ -61,7 +60,10 @@ def test_a_scenario_built_in_python_names_itself_refusing_a_provider() -> None:
 
 def test_scenario_without_a_mode_is_refused(tmp_path: Path) -> None:
     text = MINIMAL.replace("mode: prep-seed\n", "")
-    with pytest.raises(ScenarioError, match=r"prep-seed.*read-back"):
+    with pytest.raises(
+        ScenarioError,
+        match=r"^scenario minimal_seed declares no mode: it must be one of prep-seed or read-back",
+    ):
         _load(tmp_path, text)
 
 
@@ -185,7 +187,10 @@ def test_an_overridden_column_cannot_also_be_trusted() -> None:
     [
         (MINIMAL + "    cuont: 3\n", "unknown key cuont"),
         (MINIMAL + "scenario_idd: 1\n", "unknown key scenario_idd"),
-        (MINIMAL.replace("    count: 2\n", ""), "tb_continent has no count"),
+        (
+            MINIMAL.replace("    count: 2\n", ""),
+            r"^scenario minimal_seed: catalog\.tb_continent has no count:",
+        ),
         (MINIMAL.replace("    count: 2", "    count: -1"), "count is -1"),
         (MINIMAL.replace("0x5001", "0x10000"), "does not fit in 16 bits"),
         (MINIMAL + MINIMAL[MINIMAL.index("  - name") :], "lists catalog.tb_continent more"),
@@ -198,19 +203,41 @@ def test_an_overridden_column_cannot_also_be_trusted() -> None:
             r"^scenario minimal_seed: table tb_continent is not schema-qualified\n"
             r"Hint: Name it with its schema, e\.g\. catalog\.tb_city\.$",
         ),
-        (MINIMAL + "    overrides: {name: {a: 1}}\n", "not a mapping"),
-        (MINIMAL + "    overrides: [name]\n", "overrides maps a column"),
-        (MINIMAL + "    providers: {name: 3}\n", "a provider is named, by a string"),
-        (MINIMAL + "    trusts_trigger: name\n", "trusts_trigger lists column names"),
+        (
+            MINIMAL + "    overrides: {name: {a: 1}}\n",
+            r"^scenario minimal_seed: catalog\.tb_continent\.name: an override is a value or a list of them, not a mapping",
+        ),
+        (
+            MINIMAL + "    overrides: [name]\n",
+            r"^scenario minimal_seed: catalog\.tb_continent: overrides maps a column to its entry",
+        ),
+        (
+            MINIMAL + "    providers: {name: 3}\n",
+            r"^scenario minimal_seed: catalog\.tb_continent: a provider is named, by a string",
+        ),
+        (
+            MINIMAL + "    providers: [name]\n",
+            r"^scenario minimal_seed: catalog\.tb_continent: providers maps a column to its entry",
+        ),
+        (
+            MINIMAL + "    trusts_trigger: name\n",
+            r"^scenario minimal_seed: catalog\.tb_continent: trusts_trigger lists column names",
+        ),
         (MINIMAL + "    fill: name\n", "fill lists column names, or is all"),
         (MINIMAL + "    fill: [3]\n", "fill lists column names, or is all"),
-        (MINIMAL + "    hierarchy: [fk]\n", "hierarchy maps parent, roots and fan_out"),
+        (
+            MINIMAL + "    hierarchy: [fk]\n",
+            r"^scenario minimal_seed: catalog\.tb_continent: hierarchy maps parent, roots and fan_out",
+        ),
         (MINIMAL + "    hierarchy: {parent: fk, roots: 1, fan_out: 2, depth: 3}\n", "key depth"),
         (
             MINIMAL + "    hierarchy: {parent: fk, roots: 1}\n",
             r"catalog\.tb_continent: hierarchy has no fan_out:, and 1 of its 2 rows has a parent",
         ),
-        (MINIMAL + "    hierarchy: {roots: 1, fan_out: 2}\n", "hierarchy has no parent:"),
+        (
+            MINIMAL + "    hierarchy: {roots: 1, fan_out: 2}\n",
+            r"^scenario minimal_seed: catalog\.tb_continent: hierarchy has no parent:",
+        ),
         (
             MINIMAL + "    hierarchy: {parent: fk, roots: 0, fan_out: 2}\n",
             r"^scenario minimal_seed: catalog\.tb_continent: hierarchy on fk: roots is 0",
@@ -353,7 +380,7 @@ def test_existing_tables_load_with_their_filter(tmp_path: Path) -> None:
     [
         (
             EXISTING.replace("existing:\n  - name: catalog.tb_continent\n", "existing: [x]\n"),
-            "an existing entry has no name:",
+            r"^scenario customers: an existing entry has no name:",
         ),
         (EXISTING + "    count: 3\n", r"existing catalog\.tb_continent: unknown key count"),
         (
@@ -362,15 +389,15 @@ def test_existing_tables_load_with_their_filter(tmp_path: Path) -> None:
         ),
         (
             EXISTING + "    where: {name: [Europe]}\n",
-            r"existing catalog\.tb_continent: where: names rows by identifier",
+            r"^scenario customers, existing catalog\.tb_continent: where: names rows by identifier",
         ),
         (
             EXISTING + "    where: {identifier: fr}\n",
-            r"existing catalog\.tb_continent: where: names rows by identifier",
+            r"^scenario customers, existing catalog\.tb_continent: where: names rows by identifier",
         ),
         (
             EXISTING + "    where: {identifier: []}\n",
-            r"existing catalog\.tb_continent: where: names rows by identifier",
+            r"^scenario customers, existing catalog\.tb_continent: where: names rows by identifier",
         ),
         (
             EXISTING + "  - name: catalog.tb_continent\n",
@@ -381,12 +408,8 @@ def test_existing_tables_load_with_their_filter(tmp_path: Path) -> None:
             r"lists catalog\.tb_country under both tables: and existing:",
         ),
         (
-            EXISTING.replace("read-back", "prep-seed"),
-            r"prep-seed cannot read catalog\.tb_continent's existing rows",
-        ),
-        (
             EXISTING.replace("existing:\n  - name: catalog.tb_continent\n", "existing: {a: b}\n"),
-            "existing lists tables",
+            r"^scenario customers: existing lists tables, each by name:",
         ),
     ],
 )
@@ -394,6 +417,19 @@ def test_a_malformed_existing_entry_is_refused(tmp_path: Path, text: str, match:
     with pytest.raises(ScenarioError, match=match) as refused:
         _load(tmp_path, text)
     assert refused.value.resolution_hint != ScenarioError.default_hint
+
+
+def test_a_prep_seed_scenario_with_existing_tables_loads_and_check_refuses_it(
+    tmp_path: Path,
+) -> None:
+    """The refusal is the check's, not the load's: semis pin loads such a scenario."""
+    scenario = _load(tmp_path, EXISTING.replace("read-back", "prep-seed"))
+    with pytest.raises(
+        ScenarioError,
+        match=r"^scenario customers: prep-seed points at catalog\.tb_continent's rows by UUID, "
+        r"and its pin records none",
+    ):
+        ScenarioManager(FACTS).check(scenario)
 
 
 NAME_HINT = "Hint: Use letters, digits, ., - and _: the name becomes file names."

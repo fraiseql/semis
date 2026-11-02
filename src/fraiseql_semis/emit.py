@@ -9,6 +9,7 @@ from itertools import groupby
 from pathlib import Path
 
 from fraiseql_semis import readback, seeds
+from fraiseql_semis.errors import ResolutionError
 from fraiseql_semis.generator import Copied, FakeDataGenerator, Fill, Override, Row
 from fraiseql_semis.hierarchy import Hierarchy, Paths, refuse_path_in_prep_seed
 from fraiseql_semis.resolution import (
@@ -19,6 +20,7 @@ from fraiseql_semis.resolution import (
 )
 from fraiseql_semis.schema import Connection, SeedFile, TableFacts
 from fraiseql_semis.staging import Staging
+from fraiseql_semis.translation import Translation, locale_keys, locale_reads
 
 
 def prep_seed(  # noqa: PLR0913 — three positionals; how each table is drawn by keyword
@@ -33,9 +35,17 @@ def prep_seed(  # noqa: PLR0913 — three positionals; how each table is drawn b
     copies: Mapping[str, Mapping[str, Copied]] | None = None,
     format: seeds.Format | None = None,
     staging: Staging | None = None,
+    existing: Mapping[str, Sequence[object]] | None = None,
+    translations: Mapping[str, Translation] | None = None,
+    locales: Mapping[str, Mapping[str, object]] | None = None,
 ) -> list[SeedFile]:
     """Mode A: every table written into its staging twin, each child's FK carrying its
     parent's UUID under the twin's ``<fk>_id`` name.
+
+    *existing* maps a table the run does not write to the UUIDs of the rows its children
+    point at, as its pin recorded them: offered before the first table is drawn.
+    *translations* are written as in read-back, each row's locale key the UUID *locales*
+    gives its code in the locale table.
 
     Rows stream from the walk to the writer, each remembered as it passes, so no
     table's rows are held; a hierarchy's levels are written as one file, roots first.
@@ -45,6 +55,10 @@ def prep_seed(  # noqa: PLR0913 — three positionals; how each table is drawn b
     for table, hierarchy in (hierarchies or {}).items():
         refuse_path_in_prep_seed(table, hierarchy)
     resolver = PrepSeedResolver()
+    for name, uuids in (existing or {}).items():
+        resolver.existing(generator.facts.keys_for(name), uuids)
+    for table, keys in (locales or {}).items():
+        resolver.locales(table, keys)
     written: list[SeedFile] = []
     walk = generator.walk(
         counts,
@@ -54,6 +68,8 @@ def prep_seed(  # noqa: PLR0913 — three positionals; how each table is drawn b
         hierarchies=hierarchies,
         copies=copies,
         resolver=resolver,
+        existing=frozenset(existing or {}),
+        translations=translations,
     )
     by_table = groupby(walk, key=lambda batch: batch[0].ref.display)
     for number, (display, batches) in enumerate(by_table, start=1):
@@ -86,8 +102,13 @@ def read_back(  # noqa: PLR0913 — four positionals; how each table is drawn by
     copies: Mapping[str, Mapping[str, Copied]] | None = None,
     format: seeds.Format | None = None,
     existing: Mapping[str, Sequence[str] | None] | None = None,
+    translations: Mapping[str, Translation] | None = None,
 ) -> list[SeedFile]:
     """Mode B: apply each table on *connection*, learn its keys, then draw its children.
+
+    *translations* maps a translated table to its translation table and locales: each
+    locale table is read by its code before the first table is drawn, and a declared
+    code with no row, or two, is refused.
 
     *existing* maps a table the run does not write to the identifiers of the rows its
     children point at, or to ``None`` for every row: their keys are read before the first
@@ -103,6 +124,17 @@ def read_back(  # noqa: PLR0913 — four positionals; how each table is drawn by
         resolver.existing(
             keys, readback.existing_keys(connection, keys, by=EXISTING_BY, values=values)
         )
+    for table, (column, codes) in locale_reads(translations or {}).items():
+        try:
+            rows = readback.existing_rows(
+                connection, generator.facts.keys_for(table), by=column, values=None, natural_id=None
+            )
+        except ResolutionError:
+            rows = []  # a locale table holding no row: the first code is refused below
+        resolver.locales(
+            table,
+            locale_keys(((code, pk) for pk, code, _ in rows), codes, table=table, column=column),
+        )
     written: list[SeedFile] = []
     levels: dict[str, int] = {}
     paths: dict[str, Paths] = {}
@@ -115,6 +147,7 @@ def read_back(  # noqa: PLR0913 — four positionals; how each table is drawn by
         copies=copies,
         resolver=resolver,
         existing=frozenset(existing or {}),
+        translations=translations,
     )
     for number, (table, stream) in enumerate(walk, start=1):
         # Held, one table or level at a time: applied, then its keys read back by its ids.
@@ -134,8 +167,11 @@ def read_back(  # noqa: PLR0913 — four positionals; how each table is drawn by
         )
         seeds.apply(connection, [seed.path])
         ids = natural_ids(table, rows)
-        keys = readback.learn(connection, table, ids) if ids and table.surrogate_pk else {}
-        resolver.remember(table, rows, keys)
+        keys = {}
+        # A table with no surrogate key is no read-back parent: there is no key to learn.
+        if table.surrogate_pk is not None:
+            keys = readback.learn(connection, table, ids) if ids else {}
+            resolver.remember(table, rows, keys)
         hierarchy = hierarchies.get(display)
         # The generator refused a path on a table with no natural id before any row.
         if hierarchy is not None and hierarchy.path is not None and table.natural_id is not None:

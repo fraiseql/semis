@@ -6,6 +6,7 @@ a schema, so a command reads them here.
 """
 
 import importlib
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib.metadata import EntryPoint, entry_points
@@ -16,12 +17,17 @@ from fraiseql_semis.errors import ProjectError, refuse_unknown
 from fraiseql_semis.faker_provider import Library, Provider
 from fraiseql_semis.providers import SHIPPED
 from fraiseql_semis.readback import checked_url
-from fraiseql_semis.scenario import ScenarioManager, read_yaml
+from fraiseql_semis.scenario import ScenarioManager
+from fraiseql_semis.scenario_file import read_yaml
 from fraiseql_semis.schema import SchemaFacts, database_url
 from fraiseql_semis.staging import Staging
+from fraiseql_semis.translation import TranslationRule, template_is_valid
 
 DEFAULT_CONFIG = Path("semis.yaml")
-_PROJECT_KEYS = {"schema", "table_codes", "scenarios", "providers", "prep_seed"}
+_PROJECT_KEYS = {"schema", "table_codes", "scenarios", "providers", "prep_seed", "translations"}
+_TRANSLATION_KEYS = {"table", "label_column", "locale_fk", "locale_table"}
+_LOCALE_TABLE = re.compile(r"(\S+\.\S+) \((\w+)\)")
+_LOCALE_TABLE_HINT = "Write locale_table: schema.table (column), e.g. public.tb_locale (code)."
 _PREP_SEED_KEYS = {"prep_seed_schema", "schema_dir", "catalog_schema"}
 _SCHEMA_KEYS = {"ddl", "env", "project_dir", "database"}
 _SOURCES = ("ddl", "env", "database")
@@ -77,7 +83,8 @@ class Project:
     *providers* its own providers by the names its scenarios give them. *staging* is
     where its prep-seed scenarios write. *schema_dir* is the schema tree holding the
     resolvers that confiture's prep-seed levels read, and *catalog_schema* the final
-    tables' fallback schema, passed only when named.
+    tables' fallback schema, passed only when named. *translations* is how its
+    translation tables are named, and the columns they use.
     """
 
     table_codes: TableCodes
@@ -88,6 +95,7 @@ class Project:
     staging: Staging = field(default_factory=Staging)
     schema_dir: Path | None = None
     catalog_schema: str | None = None
+    translations: TranslationRule = field(default_factory=TranslationRule)
 
     @classmethod
     def find(cls, config: Path | None) -> Project | None:
@@ -132,6 +140,7 @@ class Project:
             staging=staging,
             schema_dir=schema_dir,
             catalog_schema=catalog_schema,
+            translations=_translations(path, data.get("translations", {})),
         )
 
     def database_url(self, flag: str | None = None, *, mutating: bool) -> str:
@@ -189,6 +198,7 @@ class Project:
             providers=self.providers,
             libraries=self.libraries,
             staging=self.staging,
+            translations=self.translations,
         )
 
 
@@ -376,3 +386,47 @@ def _table_codes(path: Path, value: object) -> TableCodes:
         if type(code) is not int:
             raise ProjectError(f"{path}: {table}'s code is {code!r}, not an integer")
     return TableCodes(value)
+
+
+def _translations(path: Path, block: object) -> TranslationRule:
+    """The project's ``translations:`` rule: each key a string, the template naming its
+    ``{entity}``, the locale table written ``schema.table (column)``."""
+    if not isinstance(block, dict):
+        raise ProjectError(
+            f"{path}: translations: maps table, label_column, locale_fk and locale_table",
+            resolution_hint="Write translations: {table: '{schema}.tl_{entity}', label_column: label}.",
+        )
+    refuse_unknown(f"{path}: translations:", block, _TRANSLATION_KEYS, error=ProjectError)
+    rule = TranslationRule()
+    for key in ("label_column", "locale_fk"):
+        if key in block and not isinstance(block[key], str):
+            raise ProjectError(
+                f"{path}: translations: {key}: is a column name",
+                resolution_hint=f"Name the translation table's {key.replace('_', ' ')}.",
+            )
+    table = block.get("table", rule.table)
+    if not isinstance(table, str) or not template_is_valid(table):
+        raise ProjectError(
+            f"{path}: translations: table: names no {{entity}}",
+            resolution_hint=(
+                "Name the translation table from {entity}, the entity's name without tb_, "
+                "and {schema} before the dot only: '{schema}.tl_{entity}'."
+            ),
+        )
+    locale_table = None
+    if "locale_table" in block:
+        given = block["locale_table"]
+        matched = _LOCALE_TABLE.fullmatch(given) if isinstance(given, str) else None
+        if matched is None:
+            raise ProjectError(
+                f"{path}: translations: locale_table: is schema.table (column), e.g. "
+                "public.tb_locale (code)",
+                resolution_hint=_LOCALE_TABLE_HINT,
+            )
+        locale_table = (matched.group(1), matched.group(2))
+    return TranslationRule(
+        table=table,
+        label_column=block.get("label_column", rule.label_column),
+        locale_fk=block.get("locale_fk", rule.locale_fk),
+        locale_table=locale_table,
+    )

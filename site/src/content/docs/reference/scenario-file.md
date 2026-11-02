@@ -36,12 +36,42 @@ tables:
 | `description` | a string | empty |
 | `mode` | `prep-seed` or `read-back` | required: see [the two FK modes](/concepts/fk-modes/) |
 | `locale` | one of Faker's locales | `en_US` |
+| `locales` | a list of the locale table's codes, each a string or `{code: <code>, faker: <Faker locale>}` | none: a scenario with translated tables declares at least one |
+| `pseudo_locale` | the locale table's code of a pseudo-locale, whose labels transform the first locale's | none |
+| `coverage` | a mapping of a declared locale to a fraction from 0 to 1: the share of each translated table's rows given its label | none: every locale is 1 |
 | `seed` | a whole number | none: without a seed, the values differ from run to run |
 | `tables` | a list of tables, at least one | required |
-| `existing` | a list of tables the run takes parents from and does not write, read-back only | none. See [existing table keys](#existing-table-keys) |
+| `existing` | a list of tables the run takes parents from and does not write | none. See [existing table keys](#existing-table-keys) |
 
 A value of the wrong type is refused when the scenario loads, naming the scenario and the
 key, and so is a key that is not a string.
+
+`locale:` is the Faker locale of every table the scenario writes, entities included.
+`locales:` is the locales translations are written in, independent of it: `locale:
+en_US` with `locales: [fr-FR, en-GB]` draws entity names in US English and labels in
+French and British English. Each code is as the locale table holds it, and its Faker
+locale is the code itself, the code with `-` read as `_` and its region upper-cased
+(`fr-fr` → `fr_FR`), or its bare language when Faker has one (`en`, `de`); a code naming
+none of them, `fr` among them, is refused with the Faker locales of its language, and is
+given its own as `{code: fr, faker: fr_FR}`. A code listed twice, more than 254 of them,
+`locales:` with no table translated, and a translated table with no `locales:` are
+refused.
+
+`pseudo_locale:` names one more locale, by its code in the locale table, which is not a
+Faker locale. Each translated row gets one more translation row in it, after the
+declared locales', whose label is the first locale's label transformed: each letter a
+marked one, 40% longer, bracketed, `Category` → `[Ḉḁṭḕḡṓṙẏ ···]`. Only the label is
+transformed. A pseudo-locale with no `locales:`, one also under `locales:`, one that is not
+a single code, and a label column under 3 characters, too short for the brackets, are
+refused.
+
+`coverage:` gives a declared locale, or the pseudo-locale, the share of each translated
+table's rows that get its label: of `n` rows, exactly `⌊n × c⌋`, read from the decimal
+as written, so `0.29` of 100 keeps 29. `0` and `1` are allowed, and a locale not named is
+1. Which rows are left out does not depend on `seed:`. A mapping of anything else, a
+locale the scenario does not declare, a value outside 0 to 1, `.nan`, `.inf`, a boolean
+or a string, and `coverage:` with no `locales:` are refused. See
+[Gaps on purpose](/guides/multilingual/#gaps-on-purpose).
 
 A scenario's pin is not one of its keys: it is the file `<name>.pin.json` beside it,
 which `semis pin` writes. A `schema_pin:` block, where semis 0.2.0 kept it, is refused
@@ -61,6 +91,7 @@ foreign keys, whatever the order of the list.
 | `fill` | a list of nullable columns to draw rather than write `NULL`, or `all` for every one | none: a nullable column nobody names is `NULL` |
 | `trusts_trigger` | a list of writable columns a trigger fills, left out of the seed: a NOT NULL one is not refused for its absence | none |
 | `hierarchy` | the tree of a table whose foreign key points at itself | none, and required for such a table unless its self-referencing key is overridden `null`, for a flat set, or trusted to a trigger |
+| `translations` | the schema-qualified table each row's translations are written to, one row per locale of `locales:`, or `true` for the table `semis.yaml`'s [translations rule](/reference/semis-yaml/#translations) names | none |
 | `copies` | a mapping of a column to `<foreign key>.<parent column>`: the column holds that column's value in the row the key points at | none. See [copied columns](#copied-columns) |
 
 A list override with more or fewer values than `count` is refused, as is a column both
@@ -126,6 +157,27 @@ a copy the run cannot make, before a row is drawn, naming the table, the column 
 - into a NOT NULL column, through a key the run leaves `NULL`. Into a nullable column, a
   key left `NULL` copies `NULL`.
 
+## Translation table keys
+
+A table's `translations:` names its translation table. For each of the table's rows, in
+order, the run writes one row per locale of `locales:`, in that order, its columns found
+by name: the entity key is the translation table's one foreign key to the table; the
+locale key is `fk_locale`, whose foreign key names the locale table; the label is `label`,
+always drawn; the locale table finds a locale by its `code`. In read-back, each code's
+key is read from the locale table before the first table is drawn; in prep-seed, each
+code's UUID from the scenario's pin, which `semis pin -d` records. Every other column of
+the translation table follows the rules of any table the run writes. A translation table
+with a uuid `id` takes `entity sequence × 256 + slot`, the slot the locale's place in
+`locales:`. See [Multilingual scenarios](/guides/multilingual/).
+
+Refused, naming the table, before a row is drawn: a translation table the schema lacks,
+or with no `fk_locale` or no `label`; an `fk_locale` that declares no foreign key; no
+foreign key to the entity, or two; a locale table with no `code` column, with no
+surrogate key in read-back or no uuid `id` in prep-seed; a translation table also under
+`tables:` or `existing:`. Refused when the run starts, before a row is written, or by
+`semis pin`: a declared code with no row in the locale table, or two. In prep-seed, a code
+the pin does not record is refused, with the hint to run `semis pin -d`.
+
 ## Hierarchy keys
 
 | Key | Takes | Default |
@@ -142,8 +194,10 @@ Rows are drawn breadth-first: row *k* after the roots points at row
 
 Each entry of `existing:` names a table whose rows are already in the database — reference
 rows the schema's own DDL inserted — so a foreign key to it points at them, round-robin,
-as at a parent the run generated. Read-back only: prep-seed refuses it, since a child
-carries its parent's UUID, and rows semis did not write have none it can know.
+as at a parent the run generated. In read-back, their keys are read from the database. In
+prep-seed, a child carries its parent's UUID, and the run takes the UUIDs the scenario's
+pin recorded: run `semis pin` with `-d` naming the database they are read from, and a
+prep-seed scenario whose pin records none is refused.
 
 | Key | Takes | Default |
 |---|---|---|
@@ -159,8 +213,8 @@ existing:
 
 A table listed both under `tables:` and `existing:`, or twice, is refused, as is a
 `where:` naming a column other than `identifier`. When the run starts, a table with no
-rows, or a `where:` value no row matches, is refused, naming the table; so is a table
-with no surrogate key. See [the two FK modes](/concepts/fk-modes/#parents-already-in-the-database).
+rows, a `where:` value no row matches, or one two rows share, is refused, naming the
+table; so is a table with no surrogate key. See [the two FK modes](/concepts/fk-modes/#parents-already-in-the-database).
 
 ## Next steps
 

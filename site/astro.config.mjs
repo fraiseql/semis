@@ -51,6 +51,7 @@ export default defineConfig({
           label: 'Guides',
           items: [
             { label: 'Writing scenarios', slug: 'guides/scenarios' },
+            { label: 'Multilingual scenarios', slug: 'guides/multilingual' },
             { label: 'Writing a provider library', slug: 'guides/provider-libraries' },
             { label: 'Validating seeds', slug: 'guides/validating-seeds' },
             { label: 'semis in CI', slug: 'guides/ci' },

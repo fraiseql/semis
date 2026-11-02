@@ -1,0 +1,91 @@
+{
+  "confiture": "1.30.0",
+  "digest": "sha256:4c835c41a6fdc5034b21d8c4b040e28b18b6eb385ee35df44e5cc7cf19bee33d",
+  "facts": [
+    {
+      "columns": [
+        {
+          "checks": [],
+          "default": null,
+          "enum_values": null,
+          "foreign_key": null,
+          "name": "id",
+          "not_null": true,
+          "raw_sql_type": "UUID",
+          "type_key": "uuid",
+          "unique": true
+        },
+        {
+          "checks": [],
+          "default": null,
+          "enum_values": null,
+          "foreign_key": null,
+          "name": "identifier",
+          "not_null": true,
+          "raw_sql_type": "TEXT",
+          "type_key": "text",
+          "unique": true
+        },
+        {
+          "checks": [],
+          "default": null,
+          "enum_values": null,
+          "foreign_key": [
+            "catalog.tb_continent",
+            "pk_continent"
+          ],
+          "name": "fk_continent",
+          "not_null": true,
+          "raw_sql_type": "BIGINT",
+          "type_key": "bigint",
+          "unique": false
+        },
+        {
+          "checks": [],
+          "default": null,
+          "enum_values": null,
+          "foreign_key": null,
+          "name": "iso_code",
+          "not_null": true,
+          "raw_sql_type": "bpchar(2)",
+          "type_key": "char(2)",
+          "unique": false
+        }
+      ],
+      "natural_id": "id",
+      "surrogate_pk": "pk_country",
+      "table": "catalog.tb_country"
+    },
+    {
+      "columns": [
+        {
+          "checks": [],
+          "default": null,
+          "enum_values": null,
+          "foreign_key": null,
+          "name": "id",
+          "not_null": true,
+          "raw_sql_type": "UUID",
+          "type_key": "uuid",
+          "unique": true
+        },
+        {
+          "checks": [],
+          "default": null,
+          "enum_values": null,
+          "foreign_key": null,
+          "name": "identifier",
+          "not_null": true,
+          "raw_sql_type": "TEXT",
+          "type_key": "text",
+          "unique": true
+        }
+      ],
+      "existing": "catalog.tb_continent",
+      "natural_id": "id",
+      "surrogate_pk": "pk_continent"
+    }
+  ],
+  "source": "ddl",
+  "taken": "2026-10-08"
+}

@@ -17,6 +17,10 @@ ALLOWED: dict[str, tuple[frozenset[str] | None, str]] = {
     "fraiseql_semis.errors": (None, "the refusals the error boundary turns into exit codes"),
     "fraiseql_semis.project": (None, "semis.yaml: the schema, codes and scenarios to hand over"),
     "fraiseql_semis.scenario": (None, "the runs every command delegates to"),
+    "fraiseql_semis.scenario_file": (
+        frozenset({"ScenarioEntry", "catalogue", "init_scenario", "shared_ids"}),
+        "list-scenarios and init-scenario read and write the scenario files",
+    ),
     "fraiseql_semis.readback": (
         frozenset({"exclusive", "transaction"}),
         "the one transaction apply owns, and the scenario's lock around it",

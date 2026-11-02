@@ -2,7 +2,7 @@
 
 **Version**: 1.1
 **Date**: 2026-10-08
-**Depends on**: `fraiseql-confiture>=1.44,<2`, Python 3.14
+**Depends on**: `fraiseql-confiture>=1.32,<2`, Python 3.14
 **Companion documents**: [PRD.md](./PRD.md) (what semis is for), [../README.md](../README.md) (how it is used)
 
 > Every confiture behaviour this document states was measured against a trinity-pattern
@@ -700,7 +700,7 @@ and exits 1 on a `CRITICAL` or `ERROR`, as `list-scenarios` exits 1 on a shared 
 | **#666** | level 5 reported nothing when an inner-join resolver dropped a staged row, so a stale UUID passed every level | 1.32 | pinned by a contract test: `STAGED_ROW_NOT_PROMOTED` |
 | **#537** | a `--database-url` refused as `CONFIG_003` was repeated whole, password included | 1.27 | pinned by a contract test; semis still masks a URL's password in whatever a refusal prints (§9) |
 
-The floor is 1.44, the release semis is measured on; it requires Python 3.14, and so does
+The floor is 1.32, the first whose level 5 reports a dropped row, and the lock the newest release semis is measured on. A higher floor would be a cost to a project whose `pg_tviews` is older: since 1.37 confiture refuses to read a server below 0.1.0-beta.30. Confiture requires Python 3.14, and so does
 semis.
 The explicit file lists are what semis would do anyway, so they stay.
 

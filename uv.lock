@@ -159,7 +159,7 @@ wheels = [
 
 [[package]]
 name = "fraiseql-semis"
-version = "0.5.0"
+version = "0.5.1"
 source = { editable = "." }
 dependencies = [
     { name = "faker" },
@@ -181,7 +181,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "faker", specifier = ">=24.0.0" },
-    { name = "fraiseql-confiture", specifier = ">=1.44,<2" },
+    { name = "fraiseql-confiture", specifier = ">=1.32,<2" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.6.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.10" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.2" },

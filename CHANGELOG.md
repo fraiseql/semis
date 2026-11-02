@@ -6,6 +6,15 @@ All notable changes to fraiseql-semis are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-02
+
+### Fixed
+
+- **The confiture floor is 1.32, not 1.44.** 1.32 brings what 0.5.0 asked for, the report
+  of a row an inner-join resolver drops. Since 1.37 confiture refuses a `pg_tviews` older
+  than 0.1.0-beta.30, so 0.5.0's floor made a project upgrade that extension to seed data.
+  The suite passes on 1.32, 1.33, 1.35 and the locked 1.44.
+
 ## [0.5.0] - 2026-11-02
 
 ### Added
@@ -392,7 +401,8 @@ The first release.
   prints, and requires fraiseql-confiture 1.27, whose `CONFIG_003` refusal of a
   `--database-url` no longer repeats the password either.
 
-[Unreleased]: https://github.com/fraiseql/semis/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/fraiseql/semis/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/fraiseql/semis/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/fraiseql/semis/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/fraiseql/semis/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/fraiseql/semis/compare/v0.2.0...v0.3.0

@@ -128,7 +128,9 @@ def test_ci_holds_the_threshold_where_the_whole_suite_runs() -> None:
     """The integration job runs every test, so coverage is whole there; the checks job
     runs the unit tests alone, so it measures nothing."""
     assert "uv run pytest" in _runs("integration")
-    assert "uv run pytest -m 'not integration' --no-cov --ignore=tests/performance" in _runs("checks")
+    assert "uv run pytest -m 'not integration' --no-cov --ignore=tests/performance" in _runs(
+        "checks"
+    )
 
 
 FLOORS = {

@@ -157,7 +157,7 @@ another may apply the same scenario holds `exclusive` around its transaction too
 
 ```python
 Scenario(id, name, mode, tables, locale='en_US', seed=None, description='', pin=None, existing=(), locales=(), pseudo_locale=None, coverage={})
-ExistingTable(name, identifiers=None)
+ExistingTable(name, by=None, values=None)
 Scenario.for_run(*, scenario_id=None, seed=None, locale=None)
 ```
 
@@ -167,7 +167,7 @@ A scenario built in Python is refused as a loaded one is. `tables` is a tuple of
 [the scenario file](/reference/scenario-file/) names them; `copies` maps a column to a
 `Copied(key, column)`, the foreign key and the parent column it copies. `existing` is a tuple of `ExistingTable`, the
 tables a run takes parents from without writing them: every row, or those whose
-`identifier` is one of `identifiers`, in that order. `locales` is a tuple of
+`by` column is one of `values`, in that order. `locales` is a tuple of
 `Locale(code, faker)`: a code of the locale table, and the Faker locale its translations
 are drawn in; `pseudo_locale` is the pseudo-locale's code, or `None`.
 `fraiseql_semis.translation.pseudo(text, length=None)` is the pseudo-locale's transform

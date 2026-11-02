@@ -2,7 +2,7 @@
 
 **Version**: 1.1
 **Date**: 2026-10-08
-**Depends on**: `fraiseql-confiture>=1.30,<2`, Python 3.14
+**Depends on**: `fraiseql-confiture>=1.44,<2`, Python 3.14
 **Companion documents**: [PRD.md](./PRD.md) (what semis is for), [../README.md](../README.md) (how it is used)
 
 > Every confiture behaviour this document states was measured against a trinity-pattern
@@ -609,7 +609,7 @@ The projection holds, per scenario table in `dependency_order`: the table's disp
 `raw_sql_type`, `not_null`, `default`, `unique`, `checks`, `enum_values` and the FK's
 `(table, column)`; for a prep-seed scenario, then, each staging twin's columns the same
 way, or its absence; then each `existing:` table's `surrogate_pk` and `natural_id`, and
-the columns that name its rows — its natural id and its `identifier` — the same way, and
+the columns that name its rows — its natural id, its `identifier` and its `where:` column — the same way, and
 a locale table's `code` column too, in one entry even when it is also under `existing:`.
 A translation table is a written table, projected as one. It holds nothing else; a
 scenario without translations projects as 0.3.0 did.
@@ -697,9 +697,10 @@ and exits 1 on a `CRITICAL` or `ERROR`, as `list-scenarios` exits 1 on a shared 
 | **#458** | levels 2–5 took every staging table to resolve into one `catalog_schema`: a table resolved elsewhere drew false ERRORs, and its NULL FKs went uncounted | 1.24 | pinned by a contract test; `catalog_schema` is passed only when a project names it, as confiture's fallback |
 | **#498** | level 3 read a foreign key's parent from the column's name, so a key named for its role (`fk_owner` → `tb_person`) was an ERROR however its resolver mapped it | 1.25 | pinned by a contract test: the parent is the table `REFERENCES` names |
 | **#530** | level 3 judged a key with no `REFERENCES` — a key into a partitioned table cannot have one — by its name, so a role-named key its resolver maps was an ERROR | 1.27 | pinned by a contract test: the key is resolved by what its resolver joins |
+| **#666** | level 5 reported nothing when an inner-join resolver dropped a staged row, so a stale UUID passed every level | 1.32 | pinned by a contract test: `STAGED_ROW_NOT_PROMOTED` |
 | **#537** | a `--database-url` refused as `CONFIG_003` was repeated whole, password included | 1.27 | pinned by a contract test; semis still masks a URL's password in whatever a refusal prints (§9) |
 
-The floor is 1.30, the release semis is measured on; it requires Python 3.14, and so does
+The floor is 1.44, the release semis is measured on; it requires Python 3.14, and so does
 semis.
 The explicit file lists are what semis would do anyway, so they stay.
 
@@ -761,7 +762,7 @@ semis does not:
 | D33 | A nullable value column is written `NULL` unless the scenario names it: an override, a provider registered for it by name, or the table's `fill:` (`all`: every one); a library rule matching it does not name it, and the run names the columns it left `NULL` | owner, 2026-10-05 (fraiseql/semis#1) |
 | D34 | A scenario applies once, to a reset database: `apply` refuses a database holding any row in the scenario's UUID range of a table it writes into (in prep-seed, its twin too), skipping a table with no `id` column or whose `id` is not a uuid, before anything is written, naming `semis apply --reset` and `semis reset`, which delete exactly the scenario's rows (D40); no upsert | owner, 2026-10-05 (fraiseql/semis#4); amended 2026-10-07 (D40) |
 | D35 | A pin keeps the projection it digested, for every source, and a refusal names what moved by comparing it with the schema's. It is one file beside the scenario, `<name>.pin.json`, written only by `semis pin`, which rewrites it only when it moved and loads the scenario without reading it; a scenario keeping a 0.2.0 `schema_pin:` block or its facts file is refused with the hint to run `semis pin` | owner, 2026-10-05 (fraiseql/semis#5); amended 2026-10-07: out of the scenario |
-| D36 | Read-back takes parents from rows already in the database, listed under `existing:`: every row in `pk_*` order, or those `where: {identifier: [...]}` names, in that order; no table code needed, the pin covering their keys; in prep-seed, by the UUIDs the pin records (D41); a `where:` value two rows share is refused | owner, 2026-10-05 (fraiseql/semis#2); amended 2026-10-08 |
+| D36 | Read-back takes parents from rows already in the database, listed under `existing:`: every row in `pk_*` order, or those `where: {column: [...]}` names, in that order, a repeated value pointing at its row again; the column is `identifier`, or a unique `text` or `varchar` one, and the pin covers it; no table code needed, the pin covering their keys; in prep-seed, by the UUIDs the pin records (D41); a `where:` value two rows share is refused | owner, 2026-10-05 (fraiseql/semis#2); amended 2026-10-08, 2026-11-02 (fraiseql/semis#7) |
 | D37 | One apply of a scenario at a time: `semis apply` takes `pg_advisory_xact_lock(SEMIS_LOCK_CLASS, <scenario id>)` — the two-`int4` form, semis' class `0x5E3115` first, so its keys cannot meet another application's single-`bigint` ones — on a connection of its own, before the already-applied check, and holds it until the run's transaction ends: a second apply waits, then is refused once the first commits, or proceeds once it rolls back. `ScenarioManager` takes no lock on a caller's connection; a Python caller takes it with `readback.exclusive` | owner, 2026-10-06 |
 | D38 | A nullable foreign key to another table whose parent the run lacks — not in it, in it with `count: 0`, and not under `existing:` — is written `NULL` and named in the run's line of columns it leaves `NULL`, not refused: the run can write it nothing else, and says so, as D33 does for a value column. A NOT NULL key so placed is refused; an `existing:` table with no rows is refused, since listing it asks for its rows | owner, 2026-10-07 |
 | D39 | A column may copy a column of the row its foreign key points at, by a per-table `copies: {column: fk_column.parent_column}`, in both modes: the key is the table's own, drawn by semis, to another table the run writes (an `existing:` table's columns are not read); the parent column one whose value semis knows when its row is drawn; both of one `type_key`, never cast; a key left `NULL` copies `NULL`, refused into a NOT NULL column. A key, not an override: an override stays a value or a list of them, leaving a mapping free for a `jsonb` value. The facts and the pin are unchanged | owner, 2026-10-07 |

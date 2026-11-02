@@ -54,12 +54,12 @@ def test_type_checker_is_ty() -> None:
     assert "ty" in PYPROJECT["tool"]
 
 
-def test_confiture_floor_is_1_30() -> None:
-    assert "fraiseql-confiture>=1.30,<2" in PYPROJECT["project"]["dependencies"]
+def test_confiture_floor_is_1_44() -> None:
+    assert "fraiseql-confiture>=1.44,<2" in PYPROJECT["project"]["dependencies"]
 
 
 PYTHON = "3.14"
-"""The floor confiture 1.30 sets, and every tool that reads Python's version agrees."""
+"""The floor confiture 1.44 sets, and every tool that reads Python's version agrees."""
 
 
 def test_the_package_requires_the_python_floor() -> None:

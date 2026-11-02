@@ -13,7 +13,6 @@ from fraiseql_semis.errors import ResolutionError
 from fraiseql_semis.generator import Copied, FakeDataGenerator, Fill, Override, Row
 from fraiseql_semis.hierarchy import Hierarchy, Paths, refuse_path_in_prep_seed
 from fraiseql_semis.resolution import (
-    EXISTING_BY,
     PrepSeedResolver,
     ReadBackResolver,
     natural_ids,
@@ -101,7 +100,7 @@ def read_back(  # noqa: PLR0913 — four positionals; how each table is drawn by
     hierarchies: Mapping[str, Hierarchy] | None = None,
     copies: Mapping[str, Mapping[str, Copied]] | None = None,
     format: seeds.Format | None = None,
-    existing: Mapping[str, Sequence[str] | None] | None = None,
+    existing: Mapping[str, tuple[str | None, Sequence[str] | None]] | None = None,
     translations: Mapping[str, Translation] | None = None,
 ) -> list[SeedFile]:
     """Mode B: apply each table on *connection*, learn its keys, then draw its children.
@@ -110,8 +109,8 @@ def read_back(  # noqa: PLR0913 — four positionals; how each table is drawn by
     locale table is read by its code before the first table is drawn, and a declared
     code with no row, or two, is refused.
 
-    *existing* maps a table the run does not write to the identifiers of the rows its
-    children point at, or to ``None`` for every row: their keys are read before the first
+    *existing* maps a table the run does not write to the column naming the rows its
+    children point at and their values, or to ``(None, None)`` for every row: their keys are read before the first
     table is drawn. A hierarchy is applied and learned level by level, one file per level
     (``NNN_<table>.L<n>.sql``), because its children are its own rows. Everything runs
     in *connection*'s transaction, which stays the caller's: nothing is committed here,
@@ -119,11 +118,9 @@ def read_back(  # noqa: PLR0913 — four positionals; how each table is drawn by
     """
     hierarchies = hierarchies or {}
     resolver = ReadBackResolver()
-    for name, values in (existing or {}).items():
+    for name, (by, values) in (existing or {}).items():
         keys = generator.facts.keys_for(name)
-        resolver.existing(
-            keys, readback.existing_keys(connection, keys, by=EXISTING_BY, values=values)
-        )
+        resolver.existing(keys, readback.existing_keys(connection, keys, by=by, values=values))
     for table, (column, codes) in locale_reads(translations or {}).items():
         try:
             rows = readback.existing_rows(

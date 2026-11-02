@@ -325,17 +325,23 @@ def _existing_table(scenario: str, entry: object) -> ExistingTable:
     if "where" not in entry:
         return ExistingTable(name)
     block = entry["where"]
-    values = block.get(EXISTING_BY) if isinstance(block, dict) and len(block) == 1 else None
+    by, values = (
+        next(iter(block.items())) if isinstance(block, dict) and len(block) == 1 else (None, None)
+    )
     if (
-        not isinstance(values, list)
+        not isinstance(by, str)
+        or not isinstance(values, list)
         or not values
         or not all(isinstance(value, str) for value in values)
     ):
         raise ScenarioError(
-            f"{where}: where: names rows by identifier, the natural key, as a list of values",
-            resolution_hint="Write where: {identifier: [fr, de]}, the rows in the order given.",
+            f"{where}: where: names rows by one column, as a list of values",
+            resolution_hint=(
+                f"Write where: {{{EXISTING_BY}: [fr, de]}}, or a unique text column in place of "
+                f"{EXISTING_BY}: the rows in the order given."
+            ),
         )
-    return ExistingTable(name, identifiers=tuple(values))
+    return ExistingTable(name, by=by, values=tuple(values))
 
 
 def _hierarchy(table: str, entry: Mapping[str, object]) -> Hierarchy | None:

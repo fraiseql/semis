@@ -181,12 +181,17 @@ existing:
 """
 
 
-def _countries(connection: psycopg.Connection, tmp_path: Path, text: str = COUNTRIES) -> list[str]:
+def _countries(
+    connection: psycopg.Connection,
+    tmp_path: Path,
+    text: str = COUNTRIES,
+    facts: SchemaFacts = FACTS,
+) -> list[str]:
     """The run applied, then each country's continent by identifier, in the order drawn."""
     connection.execute(SEEDED)
     path = tmp_path / "countries.yaml"
     path.write_text(text)
-    manager = ScenarioManager(FACTS)
+    manager = ScenarioManager(facts)
     manager.execute(manager.load(path), tmp_path / "out", connection=connection)
     return [
         identifier
@@ -211,6 +216,38 @@ def test_where_narrows_and_orders_the_existing_rows(
 ) -> None:
     text = COUNTRIES + "    where: {identifier: [af, eu]}\n"
     assert _countries(connection, tmp_path, text) == ["af", "eu"] * 5
+
+
+UNIQUE_NAME = SchemaFacts.from_source(
+    DDL.replace("name VARCHAR(50) NOT NULL", "name VARCHAR(50) NOT NULL UNIQUE"), table_codes=CODES
+)
+
+
+def test_where_names_rows_by_a_unique_column(
+    connection: psycopg.Connection, tmp_path: Path
+) -> None:
+    text = COUNTRIES + "    where: {name: [Africa, Europe]}\n"
+    assert _countries(connection, tmp_path, text, UNIQUE_NAME) == ["af", "eu"] * 5
+
+
+def test_a_repeated_where_value_gives_a_row_its_children_in_runs(
+    connection: psycopg.Connection, tmp_path: Path
+) -> None:
+    """Round-robin over the list as written: how a scenario says the first five are Asia's."""
+    names = ", ".join(["Asia"] * 5 + ["Africa"] * 5)
+    text = COUNTRIES + f"    where: {{name: [{names}]}}\n"
+    assert _countries(connection, tmp_path, text, UNIQUE_NAME) == ["as"] * 5 + ["af"] * 5
+
+
+def test_a_where_value_no_row_holds_names_its_column(
+    connection: psycopg.Connection, tmp_path: Path
+) -> None:
+    text = COUNTRIES + "    where: {name: [Atlantis]}\n"
+    with pytest.raises(
+        ResolutionError,
+        match=rf"scenario countries: existing {CONTINENT} has no row whose name is 'Atlantis'",
+    ):
+        _countries(connection, tmp_path, text, UNIQUE_NAME)
 
 
 @pytest.mark.parametrize(

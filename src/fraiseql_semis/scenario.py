@@ -144,17 +144,28 @@ class Deleted:
     restarted: bool | None = None
 
 
+_WHERE_TYPES = frozenset({"text", "varchar"})
+"""What a ``where:`` column may be: its value reads back as written, which ``char(n)``'s
+padding and ``citext``'s case do not, and its values, strings, compare without a cast."""
+
+
 @dataclass(frozen=True)
 class ExistingTable:
     """A table a read-back run reads its parents from and does not write: every row,
-    ordered by its surrogate key, or those whose identifier is one of *identifiers*, in
-    that order."""
+    ordered by its surrogate key, or those whose *by* column is one of *values*, in that
+    order, a repeated value pointing at its row again."""
 
     name: str
-    identifiers: tuple[str, ...] | None = None
+    by: str | None = None
+    values: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         _qualified("existing table", self.name)
+        if (self.by is None) != (self.values is None):
+            raise ScenarioError(
+                f"existing table {self.name}: by and values go together",
+                resolution_hint="Give the column rows are named by and their values, or neither.",
+            )
 
 
 @dataclass(frozen=True)
@@ -541,7 +552,7 @@ class ScenarioManager:
                     out_dir,
                     **drawn,
                     format=format,
-                    existing={table.name: table.identifiers for table in scenario.existing},
+                    existing={table.name: (table.by, table.values) for table in scenario.existing},
                     translations=self._translations(scenario),
                 )
         return Run(scenario, tuple(written), self._schema_pin(scenario), notices)
@@ -725,6 +736,7 @@ class ScenarioManager:
             scenario=scenario.name,
             twins=self._twins(scenario),
             existing=[table.name for table in scenario.existing],
+            named_by=_named_by(scenario),
             coded=self._coded(scenario),
             no_pin=no_pin,
         )
@@ -760,20 +772,40 @@ class ScenarioManager:
 
     def _check_existing_keys(self, scenario: Scenario) -> None:
         """Refuse an existing table read-back cannot point a key at: one with no
-        surrogate key, or narrowed by a ``where:`` it has no identifier column for."""
+        surrogate key, or narrowed by a ``where:`` on a column that cannot name its rows."""
         for existing in scenario.existing:
             keys = self._facts.keys_for(existing.name)
-            columns = {column.name for column in self._facts.columns(existing.name) or ()}
             if keys.surrogate_pk is None:
                 reason = "shows no surrogate key to point a foreign key at"
-            elif existing.identifiers is not None and EXISTING_BY not in columns:
-                reason = f"has no {EXISTING_BY} column for where: to name its rows by"
             else:
+                reason = self._cannot_name(existing)
+            if reason is None:
                 continue
             raise ScenarioError(
                 f"scenario {scenario.name}: existing {existing.name} {reason}",
-                resolution_hint="List under existing: a trinity table, with its pk_* and identifier.",
+                resolution_hint=(
+                    "List under existing: a table with a pk_*, and name its rows by its "
+                    "identifier or a unique text column."
+                ),
             )
+
+    def _cannot_name(self, existing: ExistingTable) -> str | None:
+        """Why *existing*'s ``where:`` column cannot name its rows, if it cannot. Its
+        ``identifier`` may by name, a value two rows share being refused when read."""
+        if existing.by is None:
+            return None
+        columns = {column.name: column for column in self._facts.columns(existing.name) or ()}
+        column = columns.get(existing.by)
+        if column is None:
+            return f"has no {existing.by} column for where: to name its rows by"
+        if existing.by == EXISTING_BY:
+            return None
+        said = f"cannot be named by {existing.by} under where::"
+        if not column.unique:
+            return f"{said} it is not unique"
+        if (column.type_key or "").split("(")[0] not in _WHERE_TYPES:
+            return f"{said} it is {column.type_key}, not text"
+        return None
 
     def _refuse_reapply(self, scenario: Scenario, connection: Connection) -> None:
         """Refuse *scenario* when a table its run writes into already holds a row whose
@@ -1011,14 +1043,14 @@ class ScenarioManager:
                 connection,
                 self._facts.keys_for(existing.name),
                 by=by,
-                values=existing.identifiers,
+                values=existing.values,
                 natural_id=natural_id,
             )
             reads.append(
                 PinnedRead(
                     existing.name,
                     by,
-                    existing.identifiers,
+                    existing.values,
                     tuple((value, str(uuid)) for _, value, uuid in rows),
                 )
             )
@@ -1119,12 +1151,12 @@ class ScenarioManager:
         return {table.locale_table: table.code for table in self._translation_tables(scenario)}
 
     def _read_by(self, existing: ExistingTable) -> str | None:
-        """The column *existing*'s rows are named by in a pin: ``identifier`` for a
-        ``where:`` read, or when the table has one; ``None`` otherwise."""
+        """The column *existing*'s rows are named by in a pin: its ``where:`` column, or
+        ``identifier`` when the table has one; ``None`` otherwise."""
+        if existing.by is not None:
+            return existing.by
         names = {column.name for column in self._facts.columns(existing.name) or ()}
-        if existing.identifiers is not None or EXISTING_BY in names:
-            return EXISTING_BY
-        return None
+        return EXISTING_BY if EXISTING_BY in names else None
 
     def _pinned_read(
         self,
@@ -1162,9 +1194,7 @@ class ScenarioManager:
 
     def _pinned_existing(self, scenario: Scenario, existing: ExistingTable) -> PinnedRead:
         """The read *scenario*'s pin records for the ``existing:`` table *existing*."""
-        return self._pinned_read(
-            scenario, existing.name, self._read_by(existing), existing.identifiers
-        )
+        return self._pinned_read(scenario, existing.name, self._read_by(existing), existing.values)
 
     def _pinnable(self, scenario: Scenario, table: str, *, locale: bool = False) -> str:
         """*table*'s natural id, the UUID a prep-seed child carries for one of its rows;
@@ -1196,6 +1226,7 @@ class ScenarioManager:
             self._written_tables(scenario),
             twins=self._twins(scenario),
             existing=[table.name for table in scenario.existing],
+            named_by=_named_by(scenario),
             coded=self._coded(scenario),
         )
 
@@ -1365,6 +1396,11 @@ def _override_notice(scenario: Scenario, name: str, value: object) -> str:
 
 def _shown(name: str, value: object) -> str:
     return f"{value:#06x}" if name == "id" else str(value)
+
+
+def _named_by(scenario: Scenario) -> dict[str, str]:
+    """The ``where:`` column of each existing table that has one."""
+    return {table.name: table.by for table in scenario.existing if table.by is not None}
 
 
 def _check_id(scenario_id: object, where: str) -> None:

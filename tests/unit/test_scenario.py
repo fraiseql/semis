@@ -371,8 +371,27 @@ def test_existing_tables_load_with_their_filter(tmp_path: Path) -> None:
     scenario = _load(tmp_path, text)
     assert scenario.existing == (
         ExistingTable("catalog.tb_continent"),
-        ExistingTable("catalog.tb_other", identifiers=("fr", "de")),
+        ExistingTable("catalog.tb_other", by="identifier", values=("fr", "de")),
     )
+
+
+def test_where_names_rows_by_the_column_it_gives(tmp_path: Path) -> None:
+    text = EXISTING.replace(
+        "  - name: catalog.tb_continent\n",
+        "  - name: catalog.tb_continent\n    where: {email: [a@x.invalid, a@x.invalid, b@x.invalid]}\n",
+    )
+    assert _load(tmp_path, text).existing == (
+        ExistingTable(
+            "catalog.tb_continent",
+            by="email",
+            values=("a@x.invalid", "a@x.invalid", "b@x.invalid"),
+        ),
+    )
+
+
+def test_an_existing_table_gives_a_column_and_its_values_together() -> None:
+    with pytest.raises(ScenarioError, match=r"existing table catalog\.tb_x: by and values go"):
+        ExistingTable("catalog.tb_x", by="email")
 
 
 @pytest.mark.parametrize(
@@ -388,16 +407,16 @@ def test_existing_tables_load_with_their_filter(tmp_path: Path) -> None:
             r"^scenario \w+: existing table tb_continent is not schema-qualified\n",
         ),
         (
-            EXISTING + "    where: {name: [Europe]}\n",
-            r"^scenario customers, existing catalog\.tb_continent: where: names rows by identifier",
+            EXISTING + "    where: {name: [Europe], identifier: [eu]}\n",
+            r"^scenario customers, existing catalog\.tb_continent: where: names rows by one column",
         ),
         (
             EXISTING + "    where: {identifier: fr}\n",
-            r"^scenario customers, existing catalog\.tb_continent: where: names rows by identifier",
+            r"^scenario customers, existing catalog\.tb_continent: where: names rows by one column",
         ),
         (
             EXISTING + "    where: {identifier: []}\n",
-            r"^scenario customers, existing catalog\.tb_continent: where: names rows by identifier",
+            r"^scenario customers, existing catalog\.tb_continent: where: names rows by one column",
         ),
         (
             EXISTING + "  - name: catalog.tb_continent\n",

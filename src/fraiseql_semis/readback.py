@@ -272,7 +272,7 @@ def count(connection: Connection, table: ObjectRef) -> int:
 
 
 def existing_keys(
-    connection: Connection, table: TableKeys, *, by: str, values: Sequence[str] | None
+    connection: Connection, table: TableKeys, *, by: str | None, values: Sequence[str] | None
 ) -> list[int]:
     """The ``pk_*`` of rows *table* already holds, for a run that does not write them:
     every row's, ordered by key, or those whose *by* column is one of *values*, in their

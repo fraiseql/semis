@@ -137,7 +137,7 @@ the database the seeds are promoted into, does: it exits 1 when a pinned row is 
 UUID changed, since the seeds would point at a row that is not there, and 0 when a whole
 table only gained rows. What promotion does with a stale UUID is the project's resolver's
 to decide, and is measured (`tests/contract/test_prep_seed_existing_promotion.py`): an
-inner join drops the child, and confiture's level 5 reports nothing; a left join writes
+inner join drops the child, which level 5 reports as `CRITICAL STAGED_ROW_NOT_PROMOTED`; a left join writes
 `NULL`, which level 5 reports as `CRITICAL NULL_FK_AFTER_RESOLUTION`, or, into a NOT NULL
 key, fails, reported as `ERROR MISSING_FK_TRANSFORMATION`. A read-back scenario's pin
 records no rows: read-back reads them live. A prep-seed scenario with translations

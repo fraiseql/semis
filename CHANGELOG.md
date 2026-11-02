@@ -6,6 +6,26 @@ All notable changes to fraiseql-semis are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-02
+
+### Added
+
+- **`where:` names existing rows by any unique text column** (fraiseql/semis#7):
+  `where: {email: [a@example.invalid, b@example.invalid]}`, in read-back and in prep-seed,
+  with today's semantics: these rows, in this order, refused when one is missing. A column
+  the table lacks, one not unique, or one neither `text` nor `varchar` is refused by check.
+  The column is pinned, so it moving moves the digest; a scenario naming rows by
+  `identifier` keeps its digest. A repeated value points at its row again, so `[a, a, b, b]`
+  gives children in runs.
+
+### Changed
+
+- `ExistingTable(name, identifiers=…)` is `ExistingTable(name, by=…, values=…)`. A scenario
+  file needs no change.
+- **The floor is fraiseql-confiture 1.44.** Since 1.32, level 5 reports a staged row an
+  inner-join resolver drops, as `CRITICAL STAGED_ROW_NOT_PROMOTED` (fraiseql/confiture#666):
+  a stale UUID that passed every level now exits `semis validate-seeds` 1.
+
 ## [0.4.0] - 2026-11-02
 
 A scenario writes its entities' translations: one label per declared locale, a
@@ -372,7 +392,8 @@ The first release.
   prints, and requires fraiseql-confiture 1.27, whose `CONFIG_003` refusal of a
   `--database-url` no longer repeats the password either.
 
-[Unreleased]: https://github.com/fraiseql/semis/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/fraiseql/semis/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/fraiseql/semis/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/fraiseql/semis/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/fraiseql/semis/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/fraiseql/semis/compare/v0.1.0...v0.2.0

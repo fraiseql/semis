@@ -333,8 +333,23 @@ def test_an_existing_parent_needs_no_rows_in_the_run(tmp_path: Path) -> None:
             "    where: {identifier: [eu]}\n",
             r"existing catalog\.tb_continent has no identifier column for where:",
         ),
+        (
+            TRINITY,
+            "    where: {nope: [eu]}\n",
+            r"existing catalog\.tb_continent has no nope column for where:",
+        ),
+        (
+            TRINITY,
+            "    where: {name: [Europe]}\n",
+            r"existing catalog\.tb_continent cannot be named by name under where:: it is not unique",
+        ),
+        (
+            TRINITY,
+            "    where: {id: [eu]}\n",
+            r"existing catalog\.tb_continent cannot be named by id under where:: it is uuid, not text",
+        ),
     ],
-    ids=["no-surrogate-key", "no-identifier"],
+    ids=["no-surrogate-key", "no-identifier", "no-column", "not-unique", "not-text"],
 )
 def test_an_existing_table_read_back_cannot_point_at_is_refused(
     tmp_path: Path, ddl: str, where: str, match: str
@@ -349,6 +364,30 @@ def test_an_existing_table_read_back_cannot_point_at_is_refused(
     manager = _manager(ddl)
     with pytest.raises(ScenarioError, match=rf"scenario minimal_seed: {match}"):
         manager.check(manager.load(scenario))
+
+
+@pytest.mark.parametrize(
+    "ddl",
+    [
+        TRINITY.replace("name VARCHAR(50) NOT NULL", "name VARCHAR(50) NOT NULL UNIQUE", 1),
+        TRINITY.replace(
+            "name VARCHAR(50) NOT NULL", "name TEXT NOT NULL, CONSTRAINT uq_name UNIQUE (name)", 1
+        ),
+    ],
+    ids=["column", "table-constraint"],
+)
+def test_where_may_name_rows_by_a_unique_text_column(tmp_path: Path, ddl: str) -> None:
+    scenario = tmp_path / "countries.yaml"
+    scenario.write_text(
+        SCENARIO.replace("prep-seed", "read-back").replace(
+            "  - name: catalog.tb_continent\n    count: 2\n",
+            "existing:\n  - name: catalog.tb_continent\n    where: {name: [Europe]}\n",
+        )
+    )
+    manager = _manager(ddl)
+    assert manager.check(manager.load(scenario)) == (
+        "scenario minimal_seed is unpinned: its schema is not checked",
+    )
 
 
 @pytest.mark.parametrize(

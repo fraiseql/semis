@@ -241,6 +241,30 @@ def test_an_existing_tables_keys_are_pinned_and_a_moved_key_is_named() -> None:
     )
 
 
+def test_the_column_where_names_rows_by_is_pinned() -> None:
+    existing = ("catalog.tb_continent",)
+    named = TRINITY.replace("name VARCHAR(50) NOT NULL", "name VARCHAR(50) NOT NULL UNIQUE", 1)
+    before = projection(
+        _facts(named), TABLES[1:], existing=existing, named_by={existing[0]: "name"}
+    )
+    assert before[-1]["columns"] == [
+        _column_of(named, "id"),
+        _column_of(named, "identifier"),
+        _column_of(named, "name"),
+    ]
+    after = projection(
+        _facts(TRINITY), TABLES[1:], existing=existing, named_by={existing[0]: "name"}
+    )
+    assert describe_changes(before, after) == ("catalog.tb_continent.name: unique true → false",)
+
+
+def test_naming_rows_by_identifier_leaves_the_projection_as_it_was() -> None:
+    existing = ("catalog.tb_continent",)
+    assert projection(
+        _facts(TRINITY), TABLES[1:], existing=existing, named_by={existing[0]: "identifier"}
+    ) == projection(_facts(TRINITY), TABLES[1:], existing=existing)
+
+
 def _column_of(ddl: str, name: str) -> dict[str, object]:
     (entry,) = projection(_facts(ddl), TABLES[:1])
     return next(c for c in cast("list[dict[str, object]]", entry["columns"]) if c["name"] == name)

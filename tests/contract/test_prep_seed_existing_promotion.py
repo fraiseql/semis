@@ -158,7 +158,7 @@ def test_a_fresh_pin_promotes_each_child_onto_read_backs_parent(project: _Projec
 @pytest.mark.parametrize(
     ("project", "promoted", "reported"),
     [
-        (("NOT NULL", "INNER"), ["music", "music"], []),
+        (("NOT NULL", "INNER"), ["music", "music"], [("CRITICAL", "STAGED_ROW_NOT_PROMOTED")]),
         (("", "LEFT"), [None, "music", None, "music"], [("CRITICAL", "NULL_FK_AFTER_RESOLUTION")]),
         (("NOT NULL", "LEFT"), None, [("ERROR", "MISSING_FK_TRANSFORMATION")]),
     ],

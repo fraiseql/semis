@@ -205,7 +205,7 @@ def _doctest(block: Block, globs: dict[str, object]) -> None:
 # README ---------------------------------------------------------------------------------
 
 
-_INSTALL = "uv add fraiseql-semis          # brings fraiseql-confiture>=1.30,<2"
+_INSTALL = "uv add fraiseql-semis          # brings fraiseql-confiture>=1.44,<2"
 
 
 @check("README.md", _INSTALL)

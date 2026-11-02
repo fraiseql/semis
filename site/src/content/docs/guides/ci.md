@@ -73,7 +73,8 @@ same in a workflow that holds a secret or an identity.
   its UUID changed, and passes, saying so, when a whole table only gained rows. What
   promotion does with a stale UUID depends on the resolver's join, and is
   [measured](/concepts/schema-pins/#rows-a-prep-seed-scenario-points-at): an inner join
-  drops the child silently, so run this check where the seeds are promoted.
+  drops the child, which `semis validate-seeds` reports at level 5, so run this check where
+  the seeds are promoted, and catch it before they are.
 - **`semis validate`** fails when the schema has moved under the scenario's pin, naming
   each table and column that moved, whatever the schema's source, and when the scenario no longer fits the schema: a table gone, a parent
   missing from the run, a staging twin missing. It draws no rows.

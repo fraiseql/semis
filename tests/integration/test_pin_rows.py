@@ -118,6 +118,45 @@ def test_pin_records_the_rows_a_prep_seed_scenario_points_at(database: str, tmp_
     }
 
 
+def test_pin_records_rows_named_by_a_unique_column(database: str, tmp_path: Path) -> None:
+    """A prep-seed where: reads by its column too, repeated values kept, and the run takes them."""
+    _execute(database, f"ALTER TABLE {CATEGORY} ADD COLUMN code TEXT UNIQUE")
+    _execute(database, f"UPDATE {CATEGORY} SET code = upper(identifier)")
+    scenario = SCENARIO.replace(
+        f"  - name: {CATEGORY}\n",
+        f"  - name: {CATEGORY}\n    where: {{code: [MUSIC, MUSIC, BOOKS]}}\n",
+    )
+    ddl = DDL.replace(
+        "identifier TEXT NOT NULL UNIQUE\n",
+        "identifier TEXT NOT NULL UNIQUE,\n    code TEXT UNIQUE\n",
+        1,
+    )
+    (tmp_path / "schema.sql").write_text(ddl)
+    (tmp_path / "semis.yaml").write_text(SEMIS_YAML)
+    (tmp_path / "customers.yaml").write_text(scenario)
+    config = ["-c", str(tmp_path / "semis.yaml")]
+    pinned = runner.invoke(app, ["pin", str(tmp_path / "customers.yaml"), *config, "-d", database])
+    assert pinned.exit_code == 0, pinned.output
+    reads = json.loads((tmp_path / "customers.pin.json").read_text())["rows"]["reads"]
+    music, books = (
+        _uuids(database, f"SELECT code, id FROM {CATEGORY} WHERE code = 'MUSIC'")[0],
+        _uuids(database, f"SELECT code, id FROM {CATEGORY} WHERE code = 'BOOKS'")[0],
+    )
+    read = next(read for read in reads if read["table"] == CATEGORY)
+    assert (read["by"], read["where"], read["rows"]) == (
+        "code",
+        ["MUSIC", "MUSIC", "BOOKS"],
+        [music, music, books],
+    )
+    seeded = runner.invoke(
+        app, ["seeds", str(tmp_path / "customers.yaml"), *config, "-o", str(tmp_path / "out")]
+    )
+    assert seeded.exit_code == 0, seeded.output
+    written = next((tmp_path / "out").iterdir()).read_text()
+    assert written.count(str(music[1])) == 3
+    assert written.count(str(books[1])) == 1
+
+
 def test_a_second_pin_of_the_same_rows_is_unchanged(database: str, tmp_path: Path) -> None:
     _pin(tmp_path, database)
     again = _pin(tmp_path, database)

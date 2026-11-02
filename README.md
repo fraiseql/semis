@@ -38,7 +38,7 @@ their lock.
 ## Install
 
 ```bash
-uv add fraiseql-semis          # brings fraiseql-confiture>=1.30,<2
+uv add fraiseql-semis          # brings fraiseql-confiture>=1.44,<2
 ```
 
 semis runs on Python 3.14 and writes to PostgreSQL 16 or later.
@@ -164,6 +164,10 @@ existing:
   - name: shop.tb_country
     where: {identifier: [fr, de, es]} # these rows, in this order
 ```
+
+A table with no `identifier` is named by any unique text column, `where: {email: […]}`;
+children go round-robin over the list as written, so repeating a value gives its row more
+of them.
 
 In prep-seed, a child carries its parent's UUID, and a run reaches no database: `semis
 pin` reads the UUIDs of those rows once, from a database named on purpose, into the

@@ -123,14 +123,16 @@ class SchemaPin:
         *,
         twins: Iterable[str] = (),
         existing: Iterable[str] = (),
+        named_by: Mapping[str, str] | None = None,
         coded: Mapping[str, str] | None = None,
         taken: date | None = None,
     ) -> SchemaPin:
         """The pin of *tables* as *facts* reads them, walked in dependency order, of the
         staging *twins* a prep-seed run writes into, and of the keys of the *existing*
         tables a run points at, and of the locale tables in *coded*, each with the
-        column its locales are found by, keeping that projection."""
-        projected = projection(facts, tables, twins, existing, coded or {})
+        column its locales are found by, and the columns *named_by* names existing rows
+        by, keeping that projection."""
+        projected = projection(facts, tables, twins, existing, coded or {}, named_by=named_by)
         return cls(
             source=facts.source_kind,
             digest=digest(projected),
@@ -273,18 +275,22 @@ def digest(projected: Projection) -> str:
     return f"sha256:{hashlib.sha256(encoded.encode()).hexdigest()}"
 
 
-def projection(
+def projection(  # noqa: PLR0913 — what a pin reads, each per-table mapping apart
     facts: SchemaFacts,
     tables: Iterable[str],
     twins: Iterable[str] = (),
     existing: Iterable[str] = (),
     coded: Mapping[str, str] | None = None,
+    *,
+    named_by: Mapping[str, str] | None = None,
 ) -> Projection:
     """Per table in dependency order, what semis reads of it, and nothing else; then each
     staging twin's columns, or ``None`` for a twin the schema lacks; then each existing
     table's keys, and the columns that name its rows; a locale table in *coded*, the
-    column its locales are found by too, one entry even when it is also existing."""
+    column its locales are found by too, one entry even when it is also existing; a table
+    in *named_by*, the column its ``where:`` names rows by too."""
     coded = coded or {}
+    named_by = named_by or {}
     existing = list(existing)
     projected: list[dict[str, object]] = []
     for ref in facts.insert_order(tables):
@@ -304,7 +310,12 @@ def projection(
         )
     for table in [*existing, *(table for table in coded if table not in existing)]:
         keys = facts.keys_for(table)
-        named = {keys.natural_id, EXISTING_BY, *([coded[table]] if table in coded else [])}
+        named = {
+            keys.natural_id,
+            EXISTING_BY,
+            *([coded[table]] if table in coded else []),
+            *([named_by[table]] if table in named_by else []),
+        }
         projected.append(
             {
                 "existing": table,
@@ -406,6 +417,7 @@ def verify(  # noqa: PLR0913 — three positionals; the scenario's and the run's
     scenario: str,
     twins: Iterable[str] = (),
     existing: Iterable[str] = (),
+    named_by: Mapping[str, str] | None = None,
     coded: Mapping[str, str] | None = None,
     no_pin: bool = False,
 ) -> str:
@@ -417,7 +429,9 @@ def verify(  # noqa: PLR0913 — three positionals; the scenario's and the run's
     """
     if no_pin:
         return f"scenario {scenario}: the schema pin is not checked for this run (no_pin)"
-    current = SchemaPin.of(facts, tables, twins=twins, existing=existing, coded=coded)
+    current = SchemaPin.of(
+        facts, tables, twins=twins, existing=existing, named_by=named_by, coded=coded
+    )
     if recorded is None:
         return f"scenario {scenario} is unpinned: its schema is not checked"
     if recorded.source != current.source:

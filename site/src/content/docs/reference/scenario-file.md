@@ -202,7 +202,7 @@ prep-seed scenario whose pin records none is refused.
 | Key | Takes | Default |
 |---|---|---|
 | `name` | a schema-qualified table | required |
-| `where` | `{identifier: [value, …]}`: the rows whose identifier is one of the values, in that order | every row, ordered by its surrogate key |
+| `where` | `{column: [value, …]}`: the rows whose column is one of the values, in that order; the column is `identifier`, or a unique `text` or `varchar` one | every row, ordered by its surrogate key |
 
 ```yaml
 existing:
@@ -211,8 +211,11 @@ existing:
     where: {identifier: [fr, de, es]} # these rows, in this order
 ```
 
-A table listed both under `tables:` and `existing:`, or twice, is refused, as is a
-`where:` naming a column other than `identifier`. When the run starts, a table with no
+A table with no `identifier` is named by a unique text column, as `where: {email: […]}`.
+Children go round-robin over the list as written, so a repeated value points at its row
+again: `[ann, ann, bob]` gives `ann` two children of each three. A table listed both under `tables:` and
+`existing:`, or twice, is refused, as is a `where:` naming two columns, a column the table
+lacks, or one neither `identifier` nor a unique text column. When the run starts, a table with no
 rows, a `where:` value no row matches, or one two rows share, is refused, naming the
 table; so is a table with no surrogate key. See [the two FK modes](/concepts/fk-modes/#parents-already-in-the-database).
 

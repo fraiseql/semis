@@ -1,0 +1,39 @@
+# The whole suite on the newest fraiseql-confiture pyproject.toml allows, weekly: the lock
+# stays on the release semis is measured on, and an upstream change fails here with a name.
+name: Upstream
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  newest-confiture:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: semis
+          POSTGRES_PASSWORD: semis
+          POSTGRES_DB: semis_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SEMIS_TEST_DATABASE_URL: postgresql://semis:semis@localhost:5432/semis_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: '3.14'
+      - run: uv lock --upgrade-package fraiseql-confiture
+      - run: uv sync --all-extras --frozen
+      - run: uv run --frozen pytest --no-cov --ignore=tests/performance

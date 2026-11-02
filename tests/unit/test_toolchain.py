@@ -128,7 +128,7 @@ def test_ci_holds_the_threshold_where_the_whole_suite_runs() -> None:
     """The integration job runs every test, so coverage is whole there; the checks job
     runs the unit tests alone, so it measures nothing."""
     assert "uv run pytest" in _runs("integration")
-    assert "uv run pytest -m 'not integration' --no-cov" in _runs("checks")
+    assert "uv run pytest -m 'not integration' --no-cov --ignore=tests/performance" in _runs("checks")
 
 
 FLOORS = {
@@ -149,7 +149,7 @@ def test_every_runtime_floor_is_one_semis_runs_on() -> None:
 
 
 def test_ci_tests_the_floors() -> None:
-    lowest = "uv run --resolution lowest-direct --isolated --all-extras pytest -m 'not integration' --no-cov"
+    lowest = "uv run --resolution lowest-direct --isolated --all-extras pytest -m 'not integration' --no-cov --ignore=tests/performance"
     assert lowest in _runs("checks")
 
 

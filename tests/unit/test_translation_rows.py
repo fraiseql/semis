@@ -10,7 +10,7 @@ from fraiseql_semis import faker_provider
 from fraiseql_semis.codes import TableCodes
 from fraiseql_semis.errors import ResolutionError, RowContractError
 from fraiseql_semis.faker_provider import CustomProviderRegistry
-from fraiseql_semis.generator import FakeDataGenerator, Row
+from fraiseql_semis.generator import FakeDataGenerator, Row, TablePlan
 from fraiseql_semis.resolution import PrepSeedResolver
 from fraiseql_semis.schema import SchemaFacts
 from fraiseql_semis.translation import (
@@ -52,16 +52,16 @@ def _walk(
     facts = SchemaFacts.from_source(ddl, table_codes=TableCodes(CODES))
     resolver = PrepSeedResolver()
     resolver.locales("catalog.tb_locale", {"fr-FR": FR, "en-GB": GB})
-    translations = (
-        None
-        if locales is None
-        else {CATEGORY: Translation(TranslationTable.of(facts, CATEGORY, TL), locales)}
+    translation = (
+        None if locales is None else Translation(TranslationTable.of(facts, CATEGORY, TL), locales)
     )
+    tables = {
+        table: TablePlan(count, translation=translation if table == CATEGORY else None)
+        for table, count in (counts or {CATEGORY: 3}).items()
+    }
     generator = FakeDataGenerator(facts, 0x5008, seed=42)
     run: dict[str, list[Row]] = {}
-    for table, stream in generator.walk(
-        counts or {CATEGORY: 3}, resolver=resolver, translations=translations
-    ):
+    for table, stream in generator.walk(tables, resolver=resolver):
         rows = list(stream)
         resolver.remember(table, rows)
         run[table.ref.display] = rows
@@ -162,15 +162,16 @@ def test_a_run_makes_one_faker_per_declared_locale(monkeypatch: pytest.MonkeyPat
     resolver = PrepSeedResolver()
     resolver.locales("catalog.tb_locale", {"fr-FR": FR, "en-GB": GB})
     generator = FakeDataGenerator(facts, 0x5008, seed=42)
-    translations = {
-        entity: Translation(
-            TranslationTable.of(facts, entity, entity.replace("tb_", "tl_")), LOCALES
+    tables = {
+        entity: TablePlan(
+            2,
+            translation=Translation(
+                TranslationTable.of(facts, entity, entity.replace("tb_", "tl_")), LOCALES
+            ),
         )
         for entity in entities
     }
-    for table, stream in generator.walk(
-        dict.fromkeys(entities, 2), resolver=resolver, translations=translations
-    ):
+    for table, stream in generator.walk(tables, resolver=resolver):
         resolver.remember(table, list(stream))
     assert len(made) == 3
 
@@ -213,7 +214,7 @@ def _pseudo_walk(
     translation = Translation(TranslationTable.of(facts, CATEGORY, TL), LOCALES, pseudo)
     run: dict[str, list[Row]] = {}
     for table, stream in FakeDataGenerator(facts, 0x5008, seed=42, providers=providers).walk(
-        {CATEGORY: 3}, resolver=resolver, translations={CATEGORY: translation}
+        {CATEGORY: TablePlan(3, translation=translation)}, resolver=resolver
     ):
         run[table.ref.display] = rows = list(stream)
         resolver.remember(table, rows)
@@ -278,7 +279,7 @@ def _covered_walk(coverage: dict[str, Fraction], *, seed: int = 42) -> list[Row]
     )
     rows: list[Row] = []
     for table, stream in FakeDataGenerator(facts, 0x5008, seed=seed).walk(
-        {CATEGORY: 20}, resolver=resolver, translations={CATEGORY: translation}
+        {CATEGORY: TablePlan(20, translation=translation)}, resolver=resolver
     ):
         drawn = list(stream)
         resolver.remember(table, drawn)

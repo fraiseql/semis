@@ -53,8 +53,10 @@ from fraiseql_semis import (
 )
 from fraiseql_semis.cli import app
 from fraiseql_semis.cli.main import _deleted
+from fraiseql_semis.generator import TablePlan
 from fraiseql_semis.project import ENTRY_POINTS
 from fraiseql_semis.providers import SHIPPED
+from fraiseql_semis.tenancy import TenancyRule, Tenants
 from fraiseql_semis.translation import Translation, TranslationTable
 from tests.ddl import CODES, HIERARCHY, HIERARCHY_CODES, TRINITY, WORKED
 
@@ -223,7 +225,7 @@ CONTINENT = TRINITY[: TRINITY.index("CREATE TABLE catalog.tb_country")]
 def _chain(block: Block, context: Context) -> None:
     """The chain, run as written into a database of its own, and what psql shows after."""
     url = context.database()
-    (context.tmp_path / "db" / "schema").mkdir(parents=True)
+    (context.tmp_path / "db" / "schema").mkdir(parents=True, exist_ok=True)
     (context.tmp_path / "db" / "schema" / "010_catalog.sql").write_text(CONTINENT)
     with psycopg.connect(url, autocommit=True) as connection:
         connection.execute(CONTINENT)
@@ -1246,7 +1248,7 @@ def _multilingual(block: Block, context: Context) -> None:
     )
     written: dict[str, list[dict[str, object]]] = {}
     for table, stream in FakeDataGenerator(facts, scenario.id, seed=42).walk(
-        {spec.name: spec.count}, resolver=resolver, translations={spec.name: translation}
+        {spec.name: TablePlan(spec.count, translation=translation)}, resolver=resolver
     ):
         written[table.ref.display] = rows = list(stream)
         resolver.remember(table, rows)
@@ -1345,6 +1347,160 @@ def _translation_rule(block: Block, context: Context) -> None:
     assert rule.table_for("catalog.tb_category") == "catalog.tl_category"
 
 
+_TENANTS_GUIDE = _page("guides/tenants.md")
+
+
+def _guide_block(first: str) -> Block:
+    return next(b for b in BLOCKS if b.key == (_TENANTS_GUIDE, first))
+
+
+def _guide_project(context: Context) -> Project:
+    """The guide's schema and semis.yaml, as a project in a scratch directory."""
+    schema = _guide_block("CREATE SCHEMA app;")
+    config = next(b for b in BLOCKS if b.document == _TENANTS_GUIDE and b.title == "semis.yaml")
+    (context.tmp_path / "db" / "schema").mkdir(parents=True, exist_ok=True)
+    (context.tmp_path / "db" / "schema" / "010_app.sql").write_text(schema.text + "\n")
+    (context.tmp_path / "semis.yaml").write_text(config.text + "\n")
+    return Project.load(context.tmp_path / "semis.yaml")
+
+
+def _guide_scenario(context: Context, text: str | None = None) -> tuple[ScenarioManager, Path]:
+    """The guide's project, and its scenario, or *text* in its place."""
+    manager = _guide_project(context).manager()
+    path = context.tmp_path / "two_tenants.yaml"
+    path.write_text((text or _guide_block("scenario_id: 0x5020").text) + "\n")
+    return manager, path
+
+
+_SPREAD = (
+    "scenario two_tenants spreads app.tb_contact, app.tb_order over 2 tenants of "
+    "app.tb_organization"
+)
+
+
+@check(_TENANTS_GUIDE, "CREATE SCHEMA app;")
+def _tenants_guide(_block: Block, context: Context) -> None:
+    """The guide's project loads its rule, and its scenario checks, saying the line the
+    page shows."""
+    project = _guide_project(context)
+    assert project.tenancy is not None
+    assert (project.tenancy.column, project.tenancy.table, project.tenancy.exclude) == (
+        "tenant_id",
+        "app.tb_organization",
+        frozenset({"app.tb_audit_log"}),
+    )
+    manager, path = _guide_scenario(context)
+    assert _SPREAD in manager.check(manager.load(path), no_pin=True)
+
+
+for _first in ("schema:", "scenario_id: 0x5020", _SPREAD):
+    covered(_TENANTS_GUIDE, _first, by=(_TENANTS_GUIDE, "CREATE SCHEMA app;"))
+
+
+@check(_TENANTS_GUIDE, "SELECT count(*) AS crossing", database=True)
+def _no_crossing(block: Block, context: Context) -> None:
+    """The guide's scenario applied, then the page's query, run as written: no order's
+    contact points at another tenant's organization."""
+    url = context.database()
+    manager, path = _guide_scenario(context)
+    with psycopg.connect(url) as connection:
+        connection.execute(_page_sql(_guide_block("CREATE SCHEMA app;").text))
+        manager.apply(manager.load(path), connection=connection)
+        assert connection.execute(_page_sql(block.text)).fetchone() == (0,)
+    assert block.text.endswith("-- crossing 0")
+
+
+@check(_TENANTS_GUIDE, "- name: app.tb_order")
+def _crossing(block: Block, context: Context) -> None:
+    """In the guide's scenario, the order crosses tenants by its contact: it is no longer
+    spread, and the run says so."""
+    scenario = _guide_block("scenario_id: 0x5020").text
+    text = scenario.split("  - name: app.tb_order")[0] + textwrap.indent(block.text, "  ")
+    manager, path = _guide_scenario(context, text)
+    notices = manager.check(manager.load(path), no_pin=True)
+    assert _SPREAD.replace(", app.tb_order", "") in notices
+
+
+@check(_TENANTS_GUIDE, "existing:")
+def _existing_tenants(block: Block, context: Context) -> None:
+    """The organizations read, not written: two named tenants, and the contacts spread."""
+    scenario = _guide_block("scenario_id: 0x5020").text
+    tables = scenario.split("tables:\n")[1].split("  - name: app.tb_contact")[1]
+    text = (
+        "scenario_id: 0x5020\nname: two_tenants\nmode: read-back\nseed: 42\n"
+        f"{block.text}\ntables:\n  - name: app.tb_contact{tables}"
+    )
+    manager, path = _guide_scenario(context, text)
+    notices = manager.check(manager.load(path), no_pin=True)
+    assert _SPREAD in notices
+
+
+@check(
+    _TENANTS_GUIDE,
+    "tenants: [00000000-0000-4000-8000-00000000000a, 00000000-0000-4000-8000-00000000000b]",
+)
+def _literal_tenants(block: Block, context: Context) -> None:
+    """With no tenant table, the values listed are the tenants."""
+    (context.tmp_path / "schema.sql").write_text(_guide_block("CREATE SCHEMA app;").text)
+    config = context.tmp_path / "semis.yaml"
+    config.write_text(
+        "schema: {ddl: schema.sql}\ntable_codes: {app.tb_audit_log: 0x01}\n"
+        "tenancy: {column: tenant_id}\n"
+    )
+    manager = Project.load(config).manager()
+    path = context.tmp_path / "s.yaml"
+    path.write_text(
+        f"scenario_id: 0x5021\nname: logs\nmode: read-back\n{block.text}\ntables:\n"
+        "  - name: app.tb_audit_log\n    count: 4\n"
+    )
+    scenario = manager.load(path)
+    assert "scenario logs spreads app.tb_audit_log over 2 tenants" in manager.check(
+        scenario, no_pin=True
+    )
+
+
+@check(_page("reference/semis-yaml.md"), "tenancy:")
+def _tenancy_rule(block: Block, context: Context) -> None:
+    """The block loads into the project's tenancy rule."""
+    (context.tmp_path / "schema.sql").write_text(TRINITY)
+    config = context.tmp_path / "semis.yaml"
+    config.write_text(f"schema: {{ddl: schema.sql}}\ntable_codes: {{}}\n{block.text}\n")
+    assert Project.load(config).tenancy == TenancyRule(
+        "tenant_id",
+        table="app.tb_organization",
+        exclude=frozenset({"app.tb_audit_log"}),
+        include={"app.tb_ledger": "owner_tenant"},
+    )
+
+
+@check("README.md", "tenancy:                           # in semis.yaml")
+def _readme_tenancy(block: Block, context: Context) -> None:
+    """What the page says: two organizations, two tenants, each contact's tenant_id its
+    organization's id."""
+    (context.tmp_path / "schema.sql").write_text(TENANTS)
+    config = context.tmp_path / "semis.yaml"
+    config.write_text(
+        "schema: {ddl: schema.sql}\n"
+        "table_codes: {tenant.tb_organization: 0x0C, tenant.tb_contact: 0x0D}\n"
+        f"{block.text}\n"
+    )
+    project = Project.load(config)
+    assert project.tenancy is not None
+    tables = {"tenant.tb_organization": TablePlan(2), "tenant.tb_contact": TablePlan(6)}
+    resolver = PrepSeedResolver()
+    tenants = Tenants(2, table=project.tenancy.table)
+    generator = FakeDataGenerator(project.facts(), 0x5001, seed=42)
+    drawn: dict[str, list[dict[str, object]]] = {}
+    for table, stream in generator.walk(
+        tables, resolver=resolver, tenancy=(project.tenancy, tenants)
+    ):
+        drawn[table.ref.display] = rows = list(stream)
+        resolver.remember(table, rows)
+    contacts = drawn["tenant.tb_contact"]
+    assert [row["tenant_id"] for row in contacts] == [row["fk_customer_org"] for row in contacts]
+    assert len({row["tenant_id"] for row in contacts}) == 2
+
+
 @check("README.md", "- name: tenant.tb_organization")
 def _copied(block: Block, context: Context) -> None:
     """What the page says: twelve contacts over six organizations, each holding its own's
@@ -1356,8 +1512,7 @@ def _copied(block: Block, context: Context) -> None:
     manager.check(scenario, no_pin=True)
     resolver = PrepSeedResolver()
     walk = FakeDataGenerator(facts, scenario.id, seed=42).walk(
-        {spec.name: spec.count for spec in scenario.tables},
-        copies={spec.name: spec.copies for spec in scenario.tables},
+        {spec.name: TablePlan(spec.count, copies=spec.copies) for spec in scenario.tables},
         resolver=resolver,
     )
     drawn: dict[str, list[dict[str, object]]] = {}
@@ -1428,8 +1583,8 @@ for _first in (
     "TableCodes(mapping)",
     "FakeDataGenerator(facts, scenario_id, *, seed=None, locale='en_US', providers=None, identifier_column='identifier')",
     "seeds.write(path, table, rows, *, facts, mode, format=None)",
-    "ScenarioManager(facts, *, providers=None, libraries=(), staging=None, translations=None)",
-    "Scenario(id, name, mode, tables, locale='en_US', seed=None, description='', pin=None, existing=(), locales=(), pseudo_locale=None, coverage={})",
+    "ScenarioManager(facts, *, providers=None, libraries=(), staging=None, translations=None, tenancy=None)",
+    "Scenario(id, name, mode, tables, locale='en_US', seed=None, description='', pin=None, existing=(), locales=(), pseudo_locale=None, coverage={}, tenants=())",
     "Project.load(path)",
     "Library(name, providers, rules=())",
 ):

@@ -6,7 +6,7 @@ import pytest
 
 from fraiseql_semis.codes import TableCodes
 from fraiseql_semis.errors import ScenarioError
-from fraiseql_semis.generator import Copied, FakeDataGenerator, Row
+from fraiseql_semis.generator import Copied, FakeDataGenerator, Row, TablePlan
 from fraiseql_semis.resolution import PrepSeedResolver
 from fraiseql_semis.scenario import ScenarioManager
 from fraiseql_semis.schema import SchemaFacts
@@ -260,12 +260,12 @@ def _prep_seed_walk(copies: dict[str, Copied]) -> dict[str, list[Row]]:
     generator = FakeDataGenerator(FACTS, scenario_id=0x5005, seed=42)
     run: dict[str, list[Row]] = {}
     walk = generator.walk(
-        {"tenant.tb_organization": 6, "tenant.tb_contact": 12},
-        overrides={
-            "tenant.tb_organization": {"fk_parent_organization": None},
-            "tenant.tb_contact": {"fk_referrer": None, "fk_backup_org": None},
+        {
+            "tenant.tb_organization": TablePlan(6, overrides={"fk_parent_organization": None}),
+            "tenant.tb_contact": TablePlan(
+                12, overrides={"fk_referrer": None, "fk_backup_org": None}, copies=copies
+            ),
         },
-        copies={"tenant.tb_contact": copies},
         resolver=resolver,
     )
     for table, stream in walk:

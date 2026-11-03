@@ -111,6 +111,36 @@ table the schema lacks, `translations: true` is refused, naming the rule. A temp
 without `{entity}`, with another placeholder, or with `{schema}` after its dot is refused, as is a value that is not a string, or a `locale_table` not written
 `schema.table (column)`.
 
+## `tenancy:`
+
+The project's tenant column, which marks its tenant-scoped tables, and the tenant table
+whose rows are the tenants. With it, a scenario spreads its scoped rows over its tenants
+and keeps each key inside its row's tenant: see [several tenants](/guides/tenants/).
+
+```yaml
+tenancy:
+  column: tenant_id
+  table: app.tb_organization     # optional: the tenant table
+  exclude: [app.tb_audit_log]    # optional
+  include: {app.tb_ledger: owner_tenant}   # optional
+```
+
+| Key | Takes | Default |
+|---|---|---|
+| `column` | a column name: a table holding it is tenant-scoped | required |
+| `table` | a schema-qualified table: its rows are the tenants, and the tenant column holds a tenant's natural id | none: a scenario lists its tenants' values under `tenants:` |
+| `exclude` | a list of tables that hold the column and belong to no tenant | none |
+| `include` | a mapping of a table to its tenant column, named otherwise | none |
+
+A table is scoped when it holds the column and is not excluded, or when a key the run
+draws points at a scoped table and the scenario does not list it under
+`crosses_tenants:`. The tenant table is the dimension itself: its row *i* is tenant *i*,
+and its own keys point anywhere. A tenant column that is a foreign key is resolved as a
+key into the tenant table, and refused when it points at another. The rule is
+configuration, not a schema fact, and is not pinned. A block that is not a mapping,
+lacks `column:`, or names a table without its schema is refused, as is a table under
+both `include:` and `exclude:`.
+
 ## From Python
 
 `semis.yaml` loads into `fraiseql_semis.Project`, and a tool that drives semis from Python

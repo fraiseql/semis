@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Literal, TypedDict, cast, get_args
+from typing import Literal, cast, get_args
 from uuid import UUID
 
 from fraiseql_semis import emit, pin_file, readback, seeds
@@ -33,6 +33,7 @@ from fraiseql_semis.generator import (
     FakeDataGenerator,
     Fill,
     Override,
+    TablePlan,
     check_override_lengths,
 )
 from fraiseql_semis.hierarchy import Hierarchy, refuse_path_in_prep_seed
@@ -50,6 +51,7 @@ from fraiseql_semis.schema import (
 )
 from fraiseql_semis.seeds import Mode
 from fraiseql_semis.staging import Staging
+from fraiseql_semis.tenancy import TenancyRule, Tenants
 from fraiseql_semis.translation import (
     MAX_LOCALES,
     Locale,
@@ -82,6 +84,7 @@ class TableSpec:
     is copied from: a column of the row one of the table's foreign keys points at.
     *translations* names the table each row's translations are written to, one row per
     locale the scenario declares, or is ``True`` for the table the project's rule names.
+    *crosses_tenants* names the foreign keys that point at a parent of any tenant.
     """
 
     name: str
@@ -93,6 +96,7 @@ class TableSpec:
     hierarchy: Hierarchy | None = None
     copies: Mapping[str, Copied] = field(default_factory=dict)
     translations: str | Literal[True] | None = None
+    crosses_tenants: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         _qualified("table", self.name)
@@ -172,7 +176,8 @@ class ExistingTable:
 class Scenario:
     """A run: its id, its FK mode, its tables in the order the file lists them, the
     tables it takes parents from without writing them, and the pin of the schema it was
-    written against, when it records one."""
+    written against, when it records one. *tenants* are the values of the tenant column
+    its tenant-scoped rows spread over, when the project's tenant table is not in it."""
 
     id: int
     name: str
@@ -186,6 +191,7 @@ class Scenario:
     locales: tuple[Locale, ...] = ()
     pseudo_locale: str | None = None
     coverage: Mapping[str, Fraction] = field(default_factory=dict)
+    tenants: tuple[str | int, ...] = ()
 
     def __post_init__(self) -> None:
         _check_name(self.name)
@@ -434,7 +440,7 @@ class ScenarioManager:
     match, in the order given. A prep-seed scenario writes into *staging*'s twins.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 — the facts positionally; the project's parts by keyword
         self,
         facts: SchemaFacts,
         *,
@@ -442,10 +448,12 @@ class ScenarioManager:
         libraries: Iterable[Library] = (),
         staging: Staging | None = None,
         translations: TranslationRule | None = None,
+        tenancy: TenancyRule | None = None,
     ) -> None:
         self._facts = facts
         self._staging = staging or Staging()
         self._rule = translations or TranslationRule()
+        self._tenancy = tenancy
         self._libraries = tuple(libraries)
         self._providers = dict(providers or {})
         for library in self._libraries:
@@ -504,7 +512,7 @@ class ScenarioManager:
         out_dir.mkdir(parents=True, exist_ok=True)
         notices = self._check(scenario, no_pin=no_pin)
         generator = self._generator(scenario)
-        counts, drawn = _walk_arguments(scenario)
+        tables = _table_plans(scenario, self._translations(scenario))
         if scenario.mode == "prep-seed":
             if connection is not None:
                 raise ScenarioError(
@@ -514,9 +522,8 @@ class ScenarioManager:
             with _naming(scenario.name):
                 written = emit.prep_seed(
                     generator,
-                    counts,
+                    tables,
                     out_dir,
-                    **drawn,
                     format=format,
                     staging=self._staging,
                     existing={
@@ -525,7 +532,7 @@ class ScenarioManager:
                         ]
                         for table in scenario.existing
                     },
-                    translations=self._translations(scenario),
+                    tenancy=self._tenants(scenario),
                     locales={
                         table: {
                             str(code): UUID(uuid)
@@ -548,12 +555,11 @@ class ScenarioManager:
                 written = emit.read_back(
                     connection,
                     generator,
-                    counts,
+                    tables,
                     out_dir,
-                    **drawn,
                     format=format,
                     existing={table.name: (table.by, table.values) for table in scenario.existing},
-                    translations=self._translations(scenario),
+                    tenancy=self._tenants(scenario),
                 )
         return Run(scenario, tuple(written), self._schema_pin(scenario), notices)
 
@@ -746,17 +752,93 @@ class ScenarioManager:
                 self._pinned_existing(scenario, existing)
             for table, (column, codes) in locale_reads(self._translations(scenario)).items():
                 self._pinned_read(scenario, table, column, tuple(codes))
-        counts, drawn = _walk_arguments(scenario)
         generator = self._generator(scenario)
         existing = frozenset(table.name for table in scenario.existing)
+        tenancy = self._tenants(scenario)
         generator.walk(
-            counts, existing=existing, translations=self._translations(scenario), **drawn
+            _table_plans(scenario, self._translations(scenario)),
+            existing=existing,
+            tenancy=tenancy,
         )
+        self._check_tenant_providers(scenario, generator)
         if scenario.mode == "prep-seed":
             for table in tables:
                 ref = self._facts.facts_for(table).ref
                 self._staging.require(ref, self._facts.columns(self._staging.twin(ref)))
-        return (notice, *_table_notices(generator, scenario, self._translations(scenario)))
+        return (
+            notice,
+            *_tenant_notices(scenario, generator),
+            *_table_notices(generator, scenario, self._translations(scenario)),
+        )
+
+    def _tenants(self, scenario: Scenario) -> tuple[TenancyRule, Tenants] | None:
+        """The project's rule and *scenario*'s tenants: the rows it writes into the tenant
+        table, those ``existing: where:`` names there, or its ``tenants:``; ``None`` when
+        it has none. A tenant table read whole, or with a tenant named twice, is refused:
+        a run's tenants are named, so its shape does not follow the database."""
+        rule = self._tenancy
+        if rule is None:
+            if scenario.tenants:
+                raise ScenarioError(
+                    f"scenario {scenario.name} declares tenants:, and semis.yaml names no "
+                    "tenancy: column",
+                    resolution_hint="Name the tenant column in semis.yaml: tenancy: {column: tenant_id}.",
+                )
+            return None
+        table = rule.table
+        written = next((spec for spec in scenario.tables if spec.name == table), None)
+        read = next((entry for entry in scenario.existing if entry.name == table), None)
+        if (written is not None or read is not None) and scenario.tenants:
+            how = "writes into" if written is not None else "reads from"
+            raise ScenarioError(
+                f"scenario {scenario.name}: its tenants are the rows it {how} {table}, the "
+                "tenant table; it lists tenants: too",
+                resolution_hint="Drop tenants:, or the tenant table from the scenario.",
+            )
+        if written is not None:
+            if written.count < 1:
+                raise ScenarioError(
+                    f"scenario {scenario.name} writes no rows into {table}, the tenant table",
+                    resolution_hint="Give the tenant table a row per tenant.",
+                )
+            return rule, Tenants(written.count, table=table)
+        if read is not None:
+            return rule, Tenants(len(self._named_tenants(scenario, read)), table=table)
+        if scenario.tenants:
+            return rule, Tenants(len(scenario.tenants), scenario.tenants)
+        return None
+
+    @staticmethod
+    def _named_tenants(scenario: Scenario, read: ExistingTable) -> tuple[str, ...]:
+        """The tenants *read*, the tenant table under ``existing:``, names by ``where:``."""
+        if read.values is None:
+            raise ScenarioError(
+                f"scenario {scenario.name}: existing {read.name} is the tenant table: name "
+                "its tenants under where:",
+                resolution_hint=f"Write where: {{identifier: [<tenant>, ...]}} under {read.name}.",
+            )
+        twice = next((value for value in read.values if read.values.count(value) > 1), None)
+        if twice is not None:
+            raise ScenarioError(
+                f"scenario {scenario.name}: existing {read.name} is the tenant table, and "
+                f"where: names {twice} twice",
+                resolution_hint="Name each tenant once.",
+            )
+        return read.values
+
+    def _check_tenant_providers(self, scenario: Scenario, generator: FakeDataGenerator) -> None:
+        """Refuse a provider for a tenant column the run's tenants fill."""
+        found = generator.spread
+        if found is None:
+            return
+        for spec in scenario.tables:
+            column = found.columns.get(spec.name)
+            if column is not None and column in spec.providers:
+                raise ScenarioError(
+                    f"scenario {scenario.name}: {spec.name}.{column} is the tenant column, "
+                    "which the run's tenants fill: it cannot be given a provider",
+                    resolution_hint=f"Drop {column} from the table's providers:.",
+                )
 
     def _require_tables(self, scenario: Scenario) -> None:
         """Refuse a table *scenario* writes or reads that the schema does not hold, before
@@ -1333,6 +1415,20 @@ def _table_notices(
     yield from _coverage_notices(scenario, translations)
 
 
+def _tenant_notices(scenario: Scenario, generator: FakeDataGenerator) -> Iterator[str]:
+    """A line naming the tables the run spreads over its tenants, and how many."""
+    found = generator.spread
+    if found is None:
+        return
+    tenants = found.tenants
+    spread = [table for table in found.scoped if table != tenants.table]
+    of = f" of {tenants.table}" if tenants.table is not None else ""
+    yield (
+        f"scenario {scenario.name} spreads {', '.join(spread) or 'no table'} over "
+        f"{tenants.count} tenants{of}"
+    )
+
+
 def _coverage_notices(scenario: Scenario, translations: Mapping[str, Translation]) -> Iterator[str]:
     """A line per translation table whose coverage leaves labels out, in the words of
     confiture's coverage check: ``tl_x: 20 rows × 4 locales, en-GB 4 missing``."""
@@ -1357,11 +1453,13 @@ def _left_null_notices(generator: FakeDataGenerator, scenario: Scenario) -> Iter
     counts = {spec.name: spec.count for spec in scenario.tables}
     existing = frozenset(table.name for table in scenario.existing)
     parents = "tables: or existing:" if scenario.mode == "read-back" else "tables:"
+    tenant_columns = generator.spread.columns if generator.spread is not None else {}
     for spec in scenario.tables:
+        tenant = {tenant_columns[spec.name]: "tenant"} if spec.name in tenant_columns else {}
         columns = generator.left_null(
             spec.name,
             trusted=spec.trusts_trigger,
-            overrides=spec.overrides,
+            overrides={**spec.overrides, **tenant},
             fill=spec.fill,
             hierarchy=spec.hierarchy,
             counts=counts,
@@ -1440,23 +1538,21 @@ def _qualified(kind: str, name: object) -> None:
         )
 
 
-class _Drawn(TypedDict):
-    trusted: dict[str, frozenset[str]]
-    overrides: dict[str, Mapping[str, Override]]
-    fill: dict[str, Fill]
-    hierarchies: dict[str, Hierarchy]
-    copies: dict[str, Mapping[str, Copied]]
-
-
-def _walk_arguments(scenario: Scenario) -> tuple[dict[str, int], _Drawn]:
-    """The counts a scenario walks, and how each table is drawn, per table."""
-    counts = {spec.name: spec.count for spec in scenario.tables}
-    return counts, _Drawn(
-        trusted={spec.name: spec.trusts_trigger for spec in scenario.tables},
-        overrides={spec.name: spec.overrides for spec in scenario.tables},
-        fill={spec.name: spec.fill for spec in scenario.tables},
-        hierarchies={
-            spec.name: spec.hierarchy for spec in scenario.tables if spec.hierarchy is not None
-        },
-        copies={spec.name: spec.copies for spec in scenario.tables if spec.copies},
-    )
+def _table_plans(
+    scenario: Scenario, translations: Mapping[str, Translation]
+) -> dict[str, TablePlan]:
+    """How a run of *scenario* draws each of its tables, *translations* its translated
+    tables' translation tables."""
+    return {
+        spec.name: TablePlan(
+            spec.count,
+            trusted=spec.trusts_trigger,
+            overrides=spec.overrides,
+            fill=spec.fill,
+            hierarchy=spec.hierarchy,
+            copies=spec.copies,
+            translation=translations.get(spec.name),
+            crosses=spec.crosses_tenants,
+        )
+        for spec in scenario.tables
+    }

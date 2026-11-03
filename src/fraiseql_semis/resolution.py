@@ -99,6 +99,7 @@ class _RoundRobin:
                 f"{_parent_of(column, table).display}, which is not remembered yet",
                 resolution_hint="Remember each level of a hierarchy before the walk draws the next.",
             )
+        self._last[table, column.name] = row
         return values[row]
 
     def _values(self, column: ColumnFacts, table: str) -> list[object]:

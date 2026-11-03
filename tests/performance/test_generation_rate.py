@@ -21,7 +21,7 @@ import pytest
 from fraiseql_semis import Project
 from fraiseql_semis.codes import TableCodes
 from fraiseql_semis.faker_provider import CustomProviderRegistry
-from fraiseql_semis.generator import FakeDataGenerator
+from fraiseql_semis.generator import FakeDataGenerator, TablePlan
 from fraiseql_semis.resolution import PrepSeedResolver
 from fraiseql_semis.schema import SchemaFacts
 
@@ -68,9 +68,10 @@ def _rows_per_second() -> float:
     )
     resolver = PrepSeedResolver()
     walk = generator.walk(
-        {spec.name: spec.count for spec in tables},
-        overrides={spec.name: spec.overrides for spec in tables},
-        hierarchies={spec.name: spec.hierarchy for spec in tables if spec.hierarchy is not None},
+        {
+            spec.name: TablePlan(spec.count, overrides=spec.overrides, hierarchy=spec.hierarchy)
+            for spec in tables
+        },
         resolver=resolver,
     )
     drawn = 0

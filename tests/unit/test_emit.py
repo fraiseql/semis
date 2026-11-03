@@ -7,18 +7,18 @@ import pytest
 
 from fraiseql_semis import emit
 from fraiseql_semis.codes import TableCodes
-from fraiseql_semis.generator import FakeDataGenerator
+from fraiseql_semis.generator import FakeDataGenerator, TablePlan
 from fraiseql_semis.hierarchy import Hierarchy
 from fraiseql_semis.schema import SchemaFacts
 from tests.ddl import CODES, HIERARCHY, HIERARCHY_CODES, TRINITY
 
 FACTS = SchemaFacts.from_source(TRINITY, table_codes=TableCodes(CODES))
-COUNTS = {"catalog.tb_country": 4, "catalog.tb_continent": 2}
+TABLES = {"catalog.tb_country": TablePlan(4), "catalog.tb_continent": TablePlan(2)}
 
 
 def _prep_seed(out: Path) -> list[Path]:
     generator = FakeDataGenerator(FACTS, scenario_id=0x5001, seed=42)
-    return [seed.path for seed in emit.prep_seed(generator, COUNTS, out)]
+    return [seed.path for seed in emit.prep_seed(generator, TABLES, out)]
 
 
 def _refuse(*_: object, **__: object) -> None:
@@ -54,7 +54,7 @@ def test_a_hierarchy_is_one_prep_seed_file_roots_first(tmp_path: Path) -> None:
     generator = FakeDataGenerator(facts, scenario_id=0x5001, seed=42)
     tree = Hierarchy(parent="fk_parent_location", roots=2, fan_out=3)
     (seed,) = emit.prep_seed(
-        generator, {"catalog.tb_location": 8}, tmp_path, hierarchies={"catalog.tb_location": tree}
+        generator, {"catalog.tb_location": TablePlan(8, hierarchy=tree)}, tmp_path
     )
     text = seed.path.read_text()
     first_root = "05060708-5001-8001-8000-000000000001"

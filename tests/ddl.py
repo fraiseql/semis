@@ -225,3 +225,133 @@ CREATE TABLE prep_seed.tl_category (
 """
 
 TRANSLATED_CODES = {"catalog.tb_category": 0x0D0E0F10, "catalog.tl_category": 0x0E0F1011}
+
+
+# Tenants: organizations are the tenants; contacts and projects hold a tenant_id; a task
+# belongs to its project's tenant through its key alone; categories are shared; folders
+# are a tree within a tenant; the audit log holds a tenant_id and is not tenant-scoped.
+TENANTS = """
+CREATE SCHEMA app;
+
+CREATE TABLE app.tb_organization (
+    pk_organization BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL UNIQUE,
+    name VARCHAR(50) NOT NULL,
+    fk_parent_organization BIGINT REFERENCES app.tb_organization (pk_organization)
+);
+
+CREATE TABLE app.tb_category (
+    pk_category BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL
+);
+
+CREATE TABLE app.tb_contact (
+    pk_contact BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL UNIQUE,
+    tenant_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
+    fk_organization BIGINT NOT NULL REFERENCES app.tb_organization (pk_organization),
+    fk_category BIGINT NOT NULL REFERENCES app.tb_category (pk_category),
+    email TEXT NOT NULL UNIQUE,
+    tenant_label UUID
+);
+
+CREATE TABLE app.tb_project (
+    pk_project BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL UNIQUE,
+    tenant_id UUID NOT NULL,
+    name TEXT NOT NULL
+);
+
+CREATE TABLE app.tb_task (
+    pk_task BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL UNIQUE,
+    fk_project BIGINT NOT NULL REFERENCES app.tb_project (pk_project),
+    fk_assignee BIGINT REFERENCES app.tb_contact (pk_contact),
+    title TEXT NOT NULL
+);
+
+CREATE TABLE app.tb_folder (
+    pk_folder BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL UNIQUE,
+    tenant_id UUID NOT NULL,
+    fk_parent_folder BIGINT REFERENCES app.tb_folder (pk_folder),
+    name TEXT NOT NULL
+);
+
+CREATE TABLE app.tb_locale (
+    pk_locale BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL UNIQUE,
+    code TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE app.tl_project (
+    fk_project BIGINT NOT NULL REFERENCES app.tb_project (pk_project),
+    fk_locale BIGINT NOT NULL REFERENCES app.tb_locale (pk_locale),
+    label TEXT NOT NULL,
+    tenant_id UUID NOT NULL
+);
+
+CREATE TABLE app.tb_membership (
+    pk_membership BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL UNIQUE,
+    tenant_id BIGINT NOT NULL REFERENCES app.tb_organization (pk_organization),
+    fk_contact BIGINT NOT NULL REFERENCES app.tb_contact (pk_contact)
+);
+
+CREATE TABLE app.tb_audit (
+    pk_audit BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id UUID NOT NULL UNIQUE,
+    identifier TEXT NOT NULL UNIQUE,
+    tenant_id UUID,
+    fk_contact BIGINT REFERENCES app.tb_contact (pk_contact),
+    note TEXT NOT NULL
+);
+
+CREATE SCHEMA prep_seed;
+
+CREATE TABLE prep_seed.tb_organization (
+    id UUID, identifier TEXT, name VARCHAR(50), fk_parent_organization_id UUID
+);
+CREATE TABLE prep_seed.tb_category (id UUID, identifier TEXT, name TEXT);
+CREATE TABLE prep_seed.tb_contact (
+    id UUID, identifier TEXT, tenant_id UUID, fk_organization_id UUID, fk_category_id UUID,
+    email TEXT, tenant_label UUID
+);
+CREATE TABLE prep_seed.tb_project (id UUID, identifier TEXT, tenant_id UUID, name TEXT);
+CREATE TABLE prep_seed.tb_task (
+    id UUID, identifier TEXT, fk_project_id UUID, fk_assignee_id UUID, title TEXT
+);
+CREATE TABLE prep_seed.tb_folder (
+    id UUID, identifier TEXT, tenant_id UUID, fk_parent_folder_id UUID, name TEXT
+);
+CREATE TABLE prep_seed.tl_project (
+    fk_project_id UUID, fk_locale_id UUID, label TEXT, tenant_id UUID
+);
+CREATE TABLE prep_seed.tb_membership (
+    id UUID, identifier TEXT, tenant_id_id UUID, fk_contact_id UUID
+);
+CREATE TABLE prep_seed.tb_audit (
+    id UUID, identifier TEXT, tenant_id UUID, fk_contact_id UUID, note TEXT
+);
+"""
+
+TENANTS_CODES = {
+    "app.tb_organization": 0x10111213,
+    "app.tb_category": 0x11121314,
+    "app.tb_contact": 0x12131415,
+    "app.tb_project": 0x13141516,
+    "app.tb_task": 0x14151617,
+    "app.tb_folder": 0x15161718,
+    "app.tb_audit": 0x16171819,
+    "app.tl_project": 0x17181920,
+    "app.tb_membership": 0x18192021,
+}

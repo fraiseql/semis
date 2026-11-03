@@ -21,10 +21,21 @@ from fraiseql_semis.scenario import ScenarioManager
 from fraiseql_semis.scenario_file import read_yaml
 from fraiseql_semis.schema import SchemaFacts, database_url
 from fraiseql_semis.staging import Staging
+from fraiseql_semis.tenancy import TenancyRule
 from fraiseql_semis.translation import TranslationRule, template_is_valid
 
 DEFAULT_CONFIG = Path("semis.yaml")
-_PROJECT_KEYS = {"schema", "table_codes", "scenarios", "providers", "prep_seed", "translations"}
+_PROJECT_KEYS = {
+    "schema",
+    "table_codes",
+    "scenarios",
+    "providers",
+    "prep_seed",
+    "translations",
+    "tenancy",
+}
+_TENANCY_KEYS = {"column", "table", "exclude", "include"}
+_TENANCY_HINT = "Write tenancy: {column: tenant_id}, with table:, exclude: and include: as needed."
 _TRANSLATION_KEYS = {"table", "label_column", "locale_fk", "locale_table"}
 _LOCALE_TABLE = re.compile(r"(\S+\.\S+) \((\w+)\)")
 _LOCALE_TABLE_HINT = "Write locale_table: schema.table (column), e.g. public.tb_locale (code)."
@@ -84,7 +95,8 @@ class Project:
     where its prep-seed scenarios write. *schema_dir* is the schema tree holding the
     resolvers that confiture's prep-seed levels read, and *catalog_schema* the final
     tables' fallback schema, passed only when named. *translations* is how its
-    translation tables are named, and the columns they use.
+    translation tables are named, and the columns they use. *tenancy* is how its
+    tenant-scoped tables are found, when it has tenants.
     """
 
     table_codes: TableCodes
@@ -96,6 +108,7 @@ class Project:
     schema_dir: Path | None = None
     catalog_schema: str | None = None
     translations: TranslationRule = field(default_factory=TranslationRule)
+    tenancy: TenancyRule | None = None
 
     @classmethod
     def find(cls, config: Path | None) -> Project | None:
@@ -141,6 +154,7 @@ class Project:
             schema_dir=schema_dir,
             catalog_schema=catalog_schema,
             translations=_translations(path, data.get("translations", {})),
+            tenancy=_tenancy(path, data["tenancy"]) if "tenancy" in data else None,
         )
 
     def database_url(self, flag: str | None = None, *, mutating: bool) -> str:
@@ -199,6 +213,7 @@ class Project:
             libraries=self.libraries,
             staging=self.staging,
             translations=self.translations,
+            tenancy=self.tenancy,
         )
 
 
@@ -430,3 +445,52 @@ def _translations(path: Path, block: object) -> TranslationRule:
         locale_fk=block.get("locale_fk", rule.locale_fk),
         locale_table=locale_table,
     )
+
+
+def _tenancy(path: Path, block: object) -> TenancyRule:
+    """The project's ``tenancy:`` rule: its column, and the tables named otherwise."""
+    where = f"{path}: tenancy:"
+    if not isinstance(block, dict):
+        raise ProjectError(
+            f"{where} maps column, table, exclude and include", resolution_hint=_TENANCY_HINT
+        )
+    refuse_unknown(where, block, _TENANCY_KEYS, error=ProjectError)
+    if "column" not in block:
+        raise ProjectError(f"{where} has no column:", resolution_hint=_TENANCY_HINT)
+    column = block["column"]
+    if not isinstance(column, str):
+        raise ProjectError(
+            f"{where} column: is a column name",
+            resolution_hint="Name the column each tenant-scoped table holds its tenant in.",
+        )
+    table = block.get("table")
+    if table is not None and not _qualified(table):
+        raise ProjectError(
+            f"{where} table: is schema.table, the table whose rows are the tenants",
+            resolution_hint="Name the tenant table with its schema, e.g. tenant.tb_organization.",
+        )
+    exclude = block.get("exclude", [])
+    if not isinstance(exclude, list) or not all(_qualified(name) for name in exclude):
+        raise ProjectError(
+            f"{where} exclude: lists schema.table names",
+            resolution_hint="List the tables that hold the column and are not tenant-scoped.",
+        )
+    include = block.get("include", {})
+    if not isinstance(include, dict) or not all(
+        _qualified(name) and isinstance(other, str) for name, other in include.items()
+    ):
+        raise ProjectError(
+            f"{where} include: maps schema.table to its tenant column",
+            resolution_hint="Write include: {billing.tb_ledger: owner_tenant}.",
+        )
+    both = sorted(set(exclude) & set(include))
+    if both:
+        raise ProjectError(
+            f"{where} {both[0]} is under both include: and exclude:",
+            resolution_hint="Name the table under one of the two.",
+        )
+    return TenancyRule(column, table=table, exclude=frozenset(exclude), include=dict(include))
+
+
+def _qualified(name: object) -> bool:
+    return isinstance(name, str) and "." in name

@@ -11,6 +11,7 @@ from fraiseql_semis.project import Project, ProjectSchema
 from fraiseql_semis.providers import SHIPPED
 from fraiseql_semis.schema import ConfigurationError, SchemaFacts
 from fraiseql_semis.staging import Staging
+from fraiseql_semis.tenancy import TenancyRule
 from fraiseql_semis.translation import TranslationRule
 from tests.ddl import CODES, TRINITY
 from tests.unit import fake_providers
@@ -482,3 +483,44 @@ def test_a_malformed_translations_block_is_refused(tmp_path: Path, block: str, s
     path = _project(tmp_path, SEMIS_YAML + block)
     with pytest.raises(ProjectError, match=rf"^{re.escape(str(path))}: {re.escape(said)}"):
         Project.load(path)
+
+
+def test_a_tenancy_block_loads_into_the_projects_rule(tmp_path: Path) -> None:
+    block = (
+        "tenancy:\n  column: tenant_id\n  table: catalog.tb_continent\n"
+        "  exclude: [catalog.tb_country]\n  include: {catalog.tb_city: owner_tenant}\n"
+    )
+    project = Project.load(_project(tmp_path, SEMIS_YAML + block))
+    assert project.tenancy == TenancyRule(
+        "tenant_id",
+        table="catalog.tb_continent",
+        exclude=frozenset({"catalog.tb_country"}),
+        include={"catalog.tb_city": "owner_tenant"},
+    )
+
+
+def test_no_tenancy_block_gives_no_rule(tmp_path: Path) -> None:
+    assert Project.load(_project(tmp_path)).tenancy is None
+
+
+@pytest.mark.parametrize(
+    ("block", "said"),
+    [
+        ("tenancy: tenant_id\n", "tenancy: maps column, table, exclude and include"),
+        ("tenancy:\n  table: catalog.tb_continent\n", "tenancy: has no column:"),
+        ("tenancy:\n  column: 3\n", "tenancy: column: is a column name"),
+        ("tenancy:\n  column: t\n  tenant: x\n", "tenancy:: unknown key tenant"),
+        ("tenancy:\n  column: t\n  table: tb_continent\n", "tenancy: table: is schema.table"),
+        ("tenancy:\n  column: t\n  exclude: catalog.tb_country\n", "tenancy: exclude: lists"),
+        ("tenancy:\n  column: t\n  exclude: [tb_country]\n", "tenancy: exclude: lists"),
+        ("tenancy:\n  column: t\n  include: [catalog.tb_city]\n", "tenancy: include: maps"),
+        ("tenancy:\n  column: t\n  include: {catalog.tb_city: 3}\n", "tenancy: include: maps"),
+        (
+            "tenancy:\n  column: t\n  exclude: [catalog.tb_city]\n  include: {catalog.tb_city: o}\n",
+            "tenancy: catalog.tb_city is under both include: and exclude:",
+        ),
+    ],
+)
+def test_a_malformed_tenancy_block_is_refused(tmp_path: Path, block: str, said: str) -> None:
+    with pytest.raises(ProjectError, match=re.escape(said)):
+        Project.load(_project(tmp_path, SEMIS_YAML + block))

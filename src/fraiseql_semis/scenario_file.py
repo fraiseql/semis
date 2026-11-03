@@ -43,6 +43,7 @@ _SCENARIO_KEYS = {
     "locales",
     "pseudo_locale",
     "coverage",
+    "tenants",
 }
 
 _TABLE_KEYS = {
@@ -55,6 +56,7 @@ _TABLE_KEYS = {
     "hierarchy",
     "copies",
     "translations",
+    "crosses_tenants",
 }
 
 _HIERARCHY_KEYS = {"parent", "roots", "fan_out", "path"}
@@ -137,8 +139,29 @@ def load(path: Path | str, *, read_pin: bool = True) -> Scenario:
         locales=_locales(data["name"], data.get("locales"), pseudo=data.get("pseudo_locale")),
         pseudo_locale=data.get("pseudo_locale"),
         coverage=_coverage(data["name"], data.get("coverage", {})),
+        tenants=_tenants(data["name"], data["tenants"]) if "tenants" in data else (),
     )
     return scenario
+
+
+def _tenants(scenario: str, values: object) -> tuple[str | int, ...]:
+    """The scenario's ``tenants:``: each tenant's value in the tenant column, once."""
+    if (
+        not isinstance(values, list)
+        or not values
+        or not all(isinstance(value, str | int) and not isinstance(value, bool) for value in values)
+    ):
+        raise ScenarioError(
+            f"scenario {scenario}: tenants: lists the tenants' values",
+            resolution_hint="Write tenants: [<tenant id>, <tenant id>], as the tenant column holds them.",
+        )
+    twice = next((value for value in values if values.count(value) > 1), None)
+    if twice is not None:
+        raise ScenarioError(
+            f"scenario {scenario}: tenants: lists {twice} twice",
+            resolution_hint="List each tenant once.",
+        )
+    return tuple(values)
 
 
 def _table(scenario: str, entry: object) -> TableSpec:
@@ -175,6 +198,12 @@ def _table(scenario: str, entry: object) -> TableSpec:
             f"{name}: trusts_trigger lists column names",
             resolution_hint="Write trusts_trigger: [column, ...].",
         )
+    crossing = entry.get("crosses_tenants", [])
+    if not isinstance(crossing, list) or not all(isinstance(column, str) for column in crossing):
+        raise ScenarioError(
+            f"{name}: crosses_tenants lists column names",
+            resolution_hint="Write crosses_tenants: [foreign key, ...].",
+        )
     return TableSpec(
         name=name,
         count=entry["count"],
@@ -185,6 +214,7 @@ def _table(scenario: str, entry: object) -> TableSpec:
         hierarchy=_hierarchy(name, entry),
         copies=_copies(name, entry),
         translations=_translations(name, entry),
+        crosses_tenants=frozenset(crossing),
     )
 
 

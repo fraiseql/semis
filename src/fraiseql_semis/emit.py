@@ -5,13 +5,14 @@ Each writes one seed file per table, parents first, and returns them in that ord
 """
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import replace
 from itertools import groupby
 from pathlib import Path
 
 from fraiseql_semis import readback, seeds
 from fraiseql_semis.errors import ResolutionError
-from fraiseql_semis.generator import Copied, FakeDataGenerator, Fill, Override, Row
-from fraiseql_semis.hierarchy import Hierarchy, Paths, refuse_path_in_prep_seed
+from fraiseql_semis.generator import FakeDataGenerator, Row, TablePlan, translations_of
+from fraiseql_semis.hierarchy import Paths, refuse_path_in_prep_seed
 from fraiseql_semis.resolution import (
     PrepSeedResolver,
     ReadBackResolver,
@@ -19,56 +20,49 @@ from fraiseql_semis.resolution import (
 )
 from fraiseql_semis.schema import Connection, SeedFile, TableFacts
 from fraiseql_semis.staging import Staging
-from fraiseql_semis.translation import Translation, locale_keys, locale_reads
+from fraiseql_semis.tenancy import TenancyRule, Tenants
+from fraiseql_semis.translation import locale_keys, locale_reads
 
 
-def prep_seed(  # noqa: PLR0913 — three positionals; how each table is drawn by keyword
+def prep_seed(  # noqa: PLR0913 — three positionals; how the run is written by keyword
     generator: FakeDataGenerator,
-    counts: Mapping[str, int],
+    tables: Mapping[str, TablePlan],
     out_dir: Path,
     *,
-    trusted: Mapping[str, frozenset[str]] | None = None,
-    overrides: Mapping[str, Mapping[str, Override]] | None = None,
-    fill: Mapping[str, Fill] | None = None,
-    hierarchies: Mapping[str, Hierarchy] | None = None,
-    copies: Mapping[str, Mapping[str, Copied]] | None = None,
     format: seeds.Format | None = None,
     staging: Staging | None = None,
     existing: Mapping[str, Sequence[object]] | None = None,
-    translations: Mapping[str, Translation] | None = None,
     locales: Mapping[str, Mapping[str, object]] | None = None,
+    tenancy: tuple[TenancyRule, Tenants] | None = None,
 ) -> list[SeedFile]:
     """Mode A: every table written into its staging twin, each child's FK carrying its
     parent's UUID under the twin's ``<fk>_id`` name.
 
     *existing* maps a table the run does not write to the UUIDs of the rows its children
     point at, as its pin recorded them: offered before the first table is drawn.
-    *translations* are written as in read-back, each row's locale key the UUID *locales*
-    gives its code in the locale table.
+    A table's translations are written as in read-back, each row's locale key the UUID
+    *locales* gives its code in the locale table. *tenancy* spreads the scoped rows over
+    the run's tenants; a tenant table under *existing* gives its UUIDs as their values.
 
     Rows stream from the walk to the writer, each remembered as it passes, so no
     table's rows are held; a hierarchy's levels are written as one file, roots first.
     Files only: no database is reached, and the output is byte-reproducible.
     """
     staging = staging or Staging()
-    for table, hierarchy in (hierarchies or {}).items():
-        refuse_path_in_prep_seed(table, hierarchy)
+    for table, plan in tables.items():
+        if plan.hierarchy is not None:
+            refuse_path_in_prep_seed(table, plan.hierarchy)
     resolver = PrepSeedResolver()
     for name, uuids in (existing or {}).items():
         resolver.existing(generator.facts.keys_for(name), uuids)
     for table, keys in (locales or {}).items():
         resolver.locales(table, keys)
+    if tenancy is not None and tenancy[1].table in (existing or {}):
+        rule, tenants = tenancy
+        tenancy = rule, replace(tenants, values=list((existing or {})[rule.table or ""]))
     written: list[SeedFile] = []
     walk = generator.walk(
-        counts,
-        trusted=trusted,
-        overrides=overrides,
-        fill=fill,
-        hierarchies=hierarchies,
-        copies=copies,
-        resolver=resolver,
-        existing=frozenset(existing or {}),
-        translations=translations,
+        tables, resolver=resolver, existing=frozenset(existing or {}), tenancy=tenancy
     )
     by_table = groupby(walk, key=lambda batch: batch[0].ref.display)
     for number, (display, batches) in enumerate(by_table, start=1):
@@ -88,40 +82,46 @@ def prep_seed(  # noqa: PLR0913 — three positionals; how each table is drawn b
     return written
 
 
-def read_back(  # noqa: PLR0913 — four positionals; how each table is drawn by keyword
+def read_back(  # noqa: PLR0913 — four positionals; how the run is written by keyword
     connection: Connection,
     generator: FakeDataGenerator,
-    counts: Mapping[str, int],
+    tables: Mapping[str, TablePlan],
     out_dir: Path,
     *,
-    trusted: Mapping[str, frozenset[str]] | None = None,
-    overrides: Mapping[str, Mapping[str, Override]] | None = None,
-    fill: Mapping[str, Fill] | None = None,
-    hierarchies: Mapping[str, Hierarchy] | None = None,
-    copies: Mapping[str, Mapping[str, Copied]] | None = None,
     format: seeds.Format | None = None,
     existing: Mapping[str, tuple[str | None, Sequence[str] | None]] | None = None,
-    translations: Mapping[str, Translation] | None = None,
+    tenancy: tuple[TenancyRule, Tenants] | None = None,
 ) -> list[SeedFile]:
     """Mode B: apply each table on *connection*, learn its keys, then draw its children.
 
-    *translations* maps a translated table to its translation table and locales: each
-    locale table is read by its code before the first table is drawn, and a declared
-    code with no row, or two, is refused.
+    A translated table's plan names its translation table and locales: each locale table
+    is read by its code before the first table is drawn, and a declared code with no row,
+    or two, is refused.
 
     *existing* maps a table the run does not write to the column naming the rows its
     children point at and their values, or to ``(None, None)`` for every row: their keys are read before the first
     table is drawn. A hierarchy is applied and learned level by level, one file per level
     (``NNN_<table>.L<n>.sql``), because its children are its own rows. Everything runs
     in *connection*'s transaction, which stays the caller's: nothing is committed here,
-    so a failure anywhere leaves every table to the caller's rollback.
+    so a failure anywhere leaves every table to the caller's rollback. *tenancy* spreads
+    the scoped rows over the run's tenants; a tenant table under *existing* is read with
+    its natural ids, its tenants' values.
     """
-    hierarchies = hierarchies or {}
+    hierarchies = {
+        table: plan.hierarchy for table, plan in tables.items() if plan.hierarchy is not None
+    }
     resolver = ReadBackResolver()
     for name, (by, values) in (existing or {}).items():
         keys = generator.facts.keys_for(name)
-        resolver.existing(keys, readback.existing_keys(connection, keys, by=by, values=values))
-    for table, (column, codes) in locale_reads(translations or {}).items():
+        if tenancy is None or name != tenancy[1].table:
+            resolver.existing(keys, readback.existing_keys(connection, keys, by=by, values=values))
+            continue
+        rows = readback.existing_rows(
+            connection, keys, by=by, values=values, natural_id=keys.natural_id
+        )
+        resolver.existing(keys, [pk for pk, _, _ in rows])
+        tenancy = tenancy[0], replace(tenancy[1], values=[uuid for _, _, uuid in rows])
+    for table, (column, codes) in locale_reads(translations_of(tables)).items():
         try:
             rows = readback.existing_rows(
                 connection, generator.facts.keys_for(table), by=column, values=None, natural_id=None
@@ -136,15 +136,7 @@ def read_back(  # noqa: PLR0913 — four positionals; how each table is drawn by
     levels: dict[str, int] = {}
     paths: dict[str, Paths] = {}
     walk = generator.walk(
-        counts,
-        trusted=trusted,
-        overrides=overrides,
-        fill=fill,
-        hierarchies=hierarchies,
-        copies=copies,
-        resolver=resolver,
-        existing=frozenset(existing or {}),
-        translations=translations,
+        tables, resolver=resolver, existing=frozenset(existing or {}), tenancy=tenancy
     )
     for number, (table, stream) in enumerate(walk, start=1):
         # Held, one table or level at a time: applied, then its keys read back by its ids.

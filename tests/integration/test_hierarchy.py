@@ -9,6 +9,7 @@ import pytest
 from confiture.platform import SeedError
 
 from fraiseql_semis import FakeDataGenerator, Hierarchy, SchemaFacts, TableCodes, emit, readback
+from fraiseql_semis.generator import TablePlan
 from fraiseql_semis.schema import TableFacts
 from tests.ddl import HIERARCHY
 
@@ -46,10 +47,14 @@ def _read_back(
     written = emit.read_back(
         connection,
         generator,
-        {LOCATION: count},
+        {
+            LOCATION: TablePlan(
+                count,
+                hierarchy=tree,
+                overrides={} if tree is not None else {"fk_parent_location": None},
+            )
+        },
         out,
-        hierarchies={} if tree is None else {LOCATION: tree},
-        overrides={} if tree is not None else {LOCATION: {"fk_parent_location": None}},
     )
     return [seed.path for seed in written]
 

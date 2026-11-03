@@ -84,6 +84,7 @@ composes DDL, and never emits an `INSERT` or a `COPY` block by hand; each is one
 | `staging.py` | `Staging` — the twin a prep-seed run writes into (§5) | — |
 | `hierarchy.py` | `Hierarchy` — a self-referencing table's tree, breadth-first (§5) | — |
 | `translation.py` | `Translation`, `TranslationTable`, the pseudo-locale's transform and coverage's choice of rows — a scenario's translation rows (§5) | — |
+| `tenancy.py` | `TenancyRule`, `Tenants`, `Spread` — which tables a run spreads over its tenants, and each row's tenant (§5) | — |
 | `emit.py` | A run in a declared mode: walked, written, and in read-back applied and learned | — |
 | `pin.py` | `SchemaPin` — the digest a scenario's pin records, its projection, and what moved (§8) | — |
 | `pin_file.py` | `<name>.pin.json` beside a scenario: where it lives, read and written (§8) | the file system |
@@ -145,8 +146,8 @@ nothing is a failure:
    drifts, and every UUID semis ever wrote is a hostage to it.
 
 Everything under `generator.py`, `rows.py`, `faker_provider.py`, `resolution.py`,
-`hierarchy.py`, `staging.py`, `translation.py`, `pin.py`, `uuid_generator.py`, `codes.py` and
-`providers/`
+`hierarchy.py`, `staging.py`, `translation.py`, `tenancy.py`, `pin.py`, `uuid_generator.py`,
+`codes.py` and `providers/`
 is pure: facts in, values out, no database and no file
 system. That is what lets the row contract be tested against a DDL string with no
 PostgreSQL anywhere.
@@ -351,6 +352,28 @@ translation row is drawn from its locale's own provider, one per declared locale
 reseeded per translation table; the scenario's provider draws none of it. A
 pseudo-locale (D44) adds a last row per entity, its label the first locale's transformed.
 A locale's `coverage:` (D45) then leaves some rows out: each is drawn, and not written.
+
+### Tenants: rows spread, keys kept inside one
+
+`semis.yaml`'s `tenancy:` names the project's tenant column once, and may name the
+tenant table, whose rows are the tenants (D46). A run's tenants are the rows it writes
+into that table, the rows `existing: where:` names there, or, with no tenant table in
+the run, the scenario's `tenants:` values; with none, a run is what it was without
+tenancy, byte for byte. A table is tenant-scoped when it holds the column and is not
+excluded, or when a key the run draws points at a scoped table and is not under
+`crosses_tenants:`, so a child without the column belongs to its parent's tenant.
+
+`tenancy.spread` decides, before a row is drawn, each scoped row's tenant (D47): the
+tenant table's row *i* is tenant *i*; a tree's roots go round-robin and a child takes
+its parent's; a translation row its entity's; any other row *i* is tenant *i mod k*. A
+scoped row is written its tenant's value in the tenant column, as an override is, and
+each of its keys into a scoped table points at that table's rows of its tenant,
+round-robin among them, through the resolver's `value_at`: the resolver learns nothing
+of tenants. A child in a tenant its parent has no row in is refused, naming the key and
+the tenant; a parent with no rows at all is D38's. Neither the UUIDs nor any other
+value move: only the tenant column and the keys do. In read-back, an `existing:` tenant
+table is read with its natural ids, the tenants' values, by `readback.existing_rows`; in
+prep-seed they are the UUIDs its pin records.
 
 ### Hierarchies: a table that references itself
 
@@ -772,6 +795,9 @@ semis does not:
 | D43 | `semis.yaml`'s `translations:` states a project's translation rule once — the table template (`{schema}.tl_{entity}`, a template with no schema in the entity's), `label_column`, `locale_fk` and `locale_table` in confiture's `schema.table (column)` form — each defaulting to D42's names; a scenario opts a table in with `translations: true`, and a named table overrides the template, not the columns. semis reads no `db/project.yaml`; the rule is not pinned | owner, 2026-10-07; amended 2026-10-08 |
 | D44 | A scenario's `pseudo_locale:` writes each entity one more translation row, last, at slot 255, built from its first locale's row: the label alone transformed — each ASCII letter onto one of 52 distinct Latin Extended Additional letters, 40% longer, bracketed, cut to its column with the brackets kept, no randomness — a unique non-label column drawn afresh, every other value copied; a collision under a unique key is refused naming both labels | owner, 2026-10-07; amended 2026-10-08 |
 | D45 | A scenario's `coverage:` gives a declared locale, or the pseudo-locale, a share `c` from 0 to 1, read exactly from its decimal: of a translated table's `n` entity rows, `⌊n × c⌋` keep its label, the first by a sha256 over the JSON `[scenario id, translation table, code, entity sequence]`, so gaps ignore the seed, each locale misses its own, and raising `c` only adds rows; a change of `count` may re-pick them. Every row is drawn, then the rows left out are not written, so the rest keep their labels and UUIDs; the run prints, per table with gaps, `tl_x: n rows × k locales, <code> m missing`, in the words of confiture's proposed coverage check (fraiseql/confiture#657), which semis neither runs nor reads | owner, 2026-10-07 |
+| D46 | `semis.yaml`'s `tenancy:` names the tenant column, and optionally the tenant table (its rows are the tenants, the column holds their natural id), `exclude:` (holds the column, belongs to no tenant) and `include:` (a table whose tenant column is named otherwise). A table is scoped when it holds the column, or when a drawn key not under `crosses_tenants:` points at a scoped table; the tenant table is the dimension, and its own keys point anywhere. A run's tenants are its tenant table's rows, written or named by `existing: where:` (a whole-table read refused, so a run's shape never follows the database), else the scenario's `tenants:`; both at once refused. The rule is configuration and not pinned | owner, 2026-11-02 (fraiseql/semis#8) |
+| D47 | A scoped row's tenant: the tenant table's row *i* is tenant *i*; a tree's root round-robin, a child its parent's; a translation row its entity's; any other row *i mod k*. Each key into a scoped table points at its parent's rows of the row's tenant, round-robin per key and tenant; a tenant the child has rows in and the parent, which has rows, none is refused before a row is drawn, NOT NULL or nullable. A key into an `existing:` table holding the tenant column, other than the tenant table, is refused unless it crosses: semis reads no tenants of rows it did not write. UUIDs and drawn values do not move | owner, 2026-11-02 (fraiseql/semis#8) |
+| D48 | With tenants, the tenant column is the run's: written its tenant's value whatever its default, and refused when overridden, copied, filled, trusted or given a provider; a tenant column that is a foreign key is a key into the tenant table, refused when it points elsewhere. `copies:` through a key follows the parent the key points at within its tenant, so a copy of the parent's id, as `tenant_id: fk_customer_org.id` was written before, is the dimension's own value. `crosses_tenants: [key]` keeps a key round-robin over every parent row; one into an unscoped table is refused | owner, 2026-11-02 (fraiseql/semis#8) |
 
 ### On the UUID encoding's own arithmetic (D6)
 

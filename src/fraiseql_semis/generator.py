@@ -4,7 +4,7 @@ Pure: facts in, rows out — no database and no file system.
 """
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from typing import Literal, NamedTuple, TypeGuard, cast
 
@@ -13,7 +13,8 @@ from fraiseql_semis.faker_provider import CustomProviderRegistry, FakerProvider
 from fraiseql_semis.hierarchy import Hierarchy
 from fraiseql_semis.resolution import Resolver, require_parents, unparented
 from fraiseql_semis.rows import declared_length, require_row
-from fraiseql_semis.schema import ColumnFacts, SchemaFacts, TableFacts
+from fraiseql_semis.schema import ColumnFacts, ColumnReference, SchemaFacts, TableFacts
+from fraiseql_semis.tenancy import Spread, TenancyRule, Tenants, spread
 from fraiseql_semis.translation import (
     PSEUDO_SLOT,
     Locale,
@@ -55,16 +56,33 @@ class _Copy(NamedTuple):
 
 
 @dataclass(frozen=True)
-class _Plan:
-    """A walk's arguments, each per table: what checking one table asks of another."""
+class TablePlan:
+    """How a run draws one table: its row count; the ``trusts_trigger`` columns; its
+    overridden columns; the nullable columns it asks drawn; a self-referencing table's
+    tree; the columns it copies from a parent row; its translation table and locales; and
+    the keys that point at a parent of any tenant.
+    """
 
-    counts: Mapping[str, int]
-    existing: frozenset[str]
-    trusted: Mapping[str, frozenset[str]]
-    overrides: Mapping[str, Mapping[str, Override]]
-    fill: Mapping[str, Fill]
-    hierarchies: Mapping[str, Hierarchy]
-    copies: Mapping[str, Mapping[str, Copied]]
+    count: int
+    trusted: frozenset[str] = frozenset()
+    overrides: Mapping[str, Override] = field(default_factory=dict)
+    fill: Fill = frozenset()
+    hierarchy: Hierarchy | None = None
+    copies: Mapping[str, Copied] = field(default_factory=dict)
+    translation: Translation | None = None
+    crosses: frozenset[str] = frozenset()
+
+
+_NOT_PLANNED = TablePlan(0)
+"""What a run says of a table it has no plan for: a translation table, whose rows follow
+its entity's."""
+
+
+def translations_of(tables: Mapping[str, TablePlan]) -> dict[str, Translation]:
+    """Each translated table of *tables*, in their order, with its translation."""
+    return {
+        table: plan.translation for table, plan in tables.items() if plan.translation is not None
+    }
 
 
 def check_override_lengths(table: str, overrides: Mapping[str, Override], count: int) -> None:
@@ -131,35 +149,39 @@ class FakeDataGenerator:
         self._seen: dict[str, dict[str, set[object]]] = {}
         # Per parent table, per column a child copies: its rows' values, in row order.
         self._kept: dict[str, dict[str, list[object]]] = {}
+        # A run's rows over its tenants, and per key and tenant the children so far.
+        self._spread: Spread | None = None
+        self._turns: dict[tuple[str, str, int], int] = {}
 
     @property
     def facts(self) -> SchemaFacts:
         """The schema this generator draws rows for."""
         return self._facts
 
-    def walk(  # noqa: PLR0913 — the counts positionally; each per-table mapping by keyword
+    @property
+    def spread(self) -> Spread | None:
+        """The last walk's rows over its tenants; ``None`` when it had none."""
+        return self._spread
+
+    def walk(
         self,
-        counts: Mapping[str, int],
+        tables: Mapping[str, TablePlan],
         *,
-        trusted: Mapping[str, frozenset[str]] | None = None,
-        overrides: Mapping[str, Mapping[str, Override]] | None = None,
-        fill: Mapping[str, Fill] | None = None,
-        hierarchies: Mapping[str, Hierarchy] | None = None,
         resolver: Resolver | None = None,
         existing: frozenset[str] = frozenset(),
-        copies: Mapping[str, Mapping[str, Copied]] | None = None,
-        translations: Mapping[str, Translation] | None = None,
+        tenancy: tuple[TenancyRule, Tenants] | None = None,
     ) -> Iterator[tuple[TableFacts, Iterator[Row]]]:
-        """Each table of *counts* with its rows, parents before children.
+        """Each table of *tables* with its rows, parents before children.
 
-        *translations* maps a table to its translation table and the locales it is
-        written in: one row per row of the table and locale, after it, each drawn in its
-        locale, its locale key the resolver's ``locale_key``.
+        With *tenancy*, the project's rule and the run's tenants, each tenant-scoped row
+        is written its tenant, and its keys into a scoped table point at a parent of
+        that tenant (D47).
 
-        *counts* maps a qualified table to its row count; *trusted* maps a table to its
-        ``trusts_trigger`` columns, *overrides* to its overridden columns, *fill* to the
-        nullable columns it asks drawn, *copies* to the columns it copies from a parent
-        row, and *hierarchies* a self-referencing table to its tree; *resolver* gives every
+        A table's translation names its translation table and the locales it is written
+        in: one row per row of the table and locale, after it, each drawn in its locale,
+        its locale key the resolver's ``locale_key``.
+
+        *tables* maps a qualified table to its ``TablePlan``; *resolver* gives every
         foreign key its value, and *existing* names the tables whose rows are in the
         database already, which the resolver knows. The order is ``dependency_order``'s, taken once, here: a
         cycle raises confiture's ``DependencyCycleError`` before any row is generated. Each
@@ -168,80 +190,110 @@ class FakeDataGenerator:
         its end before asking for the next. A hierarchy is yielded once per level, roots
         first, for the same reason: its children are its own rows.
         """
-        translations = translations or {}
+        translations = translations_of(tables)
         translated = {written.table.table: written for written in translations.values()}
         counts = {
-            **counts,
+            **{table: plan.count for table, plan in tables.items()},
             **{
-                written.table.table: counts[entity] * len(written.locales)
+                written.table.table: tables[entity].count * len(written.locales)
                 for entity, written in translations.items()
             },
         }
         existing = existing | {written.table.locale_table for written in translations.values()}
         self._sequences = {entity: [] for entity in translations}
         order = [ref.display for ref in self._facts.insert_order(counts)]
-        hierarchies = hierarchies or {}
-        plan = _Plan(
-            counts,
-            existing,
-            trusted or {},
-            overrides or {},
-            fill or {},
-            hierarchies,
-            copies or {},
-        )
         resolved: dict[str, dict[str, _Copy]] = {}
         for table in order:
             if table in translated:
                 require_parents(self._facts.facts_for(table), counts, existing=existing)
                 continue
-            given = (overrides or {}).get(table, {})
-            _check_overrides(self._facts.facts_for(table), given, counts[table])
+            plan = tables[table]
+            _check_overrides(self._facts.facts_for(table), plan.overrides, plan.count)
             self._check_fill(
                 self._facts.facts_for(table),
-                (fill or {}).get(table, frozenset()),
-                trusted=(trusted or {}).get(table, frozenset()),
-                hierarchy=hierarchies.get(table),
+                plan.fill,
+                trusted=plan.trusted,
+                hierarchy=plan.hierarchy,
             )
             require_parents(self._facts.facts_for(table), counts, existing=existing)
-            resolved[table] = self._check_copies(table, plan)
+            resolved[table] = self._check_copies(table, tables, counts, existing)
             _check_hierarchy(
                 self._facts.facts_for(table),
-                hierarchies.get(table),
-                counts[table],
-                trusted=(trusted or {}).get(table, frozenset()),
-                overrides=(overrides or {}).get(table, {}),
+                plan.hierarchy,
+                plan.count,
+                trusted=plan.trusted,
+                overrides=plan.overrides,
             )
         self._kept = {}
         for copies_of in resolved.values():
             for copy in copies_of.values():
                 self._kept.setdefault(copy.parent, {})[copy.source] = []
+        self._spread, self._turns = None, {}
+        if tenancy is not None:
+            rule, tenants = tenancy
+            if tenants.table is not None and tenants.table in tables:
+                # The tenants are the rows the run writes there: their ids are its UUIDs.
+                code = self._facts.facts_for(tenants.table).table_code
+                tenants = replace(
+                    tenants,
+                    values=[
+                        self._uuids.generate(code, sequence=row + 1) for row in range(tenants.count)
+                    ],
+                )
+            self._spread = spread(
+                self._facts,
+                rule,
+                tables,
+                order,
+                tenants,
+                existing=existing,
+                translations={
+                    written.table.table: entity for entity, written in translations.items()
+                },
+            )
+            tables = self._with_tenants(tables, self._spread)
         return self._walk(
             order,
-            counts,
+            tables,
             unparented={
                 table: unparented(self._facts.facts_for(table), counts, existing=existing)
                 for table in order
             },
-            trusted=trusted or {},
-            overrides=overrides or {},
-            fill=fill or {},
-            hierarchies=hierarchies,
             copies=resolved,
             translations=translated,
             resolver=resolver,
         )
 
-    def _walk(  # noqa: PLR0913 — the walk's per-table mappings, passed through by keyword
+    @staticmethod
+    def _with_tenants(tables: Mapping[str, TablePlan], found: Spread) -> dict[str, TablePlan]:
+        """*tables*, each scoped table's tenant column overridden by its rows' tenants'
+        values, so it is drawn, checked and reported as an overridden column is."""
+        values = found.tenants.values
+
+        def tenant_of(rows: tuple[int, ...]) -> Callable[[int], object]:
+            return lambda index: values[rows[index]] if values is not None else None
+
+        return {
+            table: (
+                replace(
+                    plan,
+                    overrides={
+                        **plan.overrides,
+                        found.columns[table]: tenant_of(found.rows[table]),
+                    },
+                )
+                if table in found.columns and table in found.rows
+                else plan
+            )
+            for table, plan in tables.items()
+        }
+
+    def _walk(  # noqa: PLR0913 — what walk checked per table, passed through by keyword
         self,
         order: list[str],
-        counts: Mapping[str, int],
+        tables: Mapping[str, TablePlan],
         *,
         unparented: Mapping[str, frozenset[str]],
-        trusted: Mapping[str, frozenset[str]],
-        overrides: Mapping[str, Mapping[str, Override]],
-        fill: Mapping[str, Fill],
-        hierarchies: Mapping[str, Hierarchy],
         copies: Mapping[str, Mapping[str, _Copy]],
         translations: Mapping[str, Translation],
         resolver: Resolver | None,
@@ -259,8 +311,8 @@ class FakeDataGenerator:
                     ),
                 )
                 continue
-            hierarchy = hierarchies.get(table)
-            count = counts[table]
+            plan = tables[table]
+            hierarchy, count = plan.hierarchy, plan.count
             levels = [range(count)] if hierarchy is None else hierarchy.levels(count)
             for level in levels:
                 yield (
@@ -269,9 +321,9 @@ class FakeDataGenerator:
                         table_facts,
                         level,
                         count,
-                        trusted=trusted.get(table, frozenset()),
-                        overrides=overrides.get(table, {}),
-                        fill=fill.get(table, frozenset()),
+                        trusted=plan.trusted,
+                        overrides=plan.overrides,
+                        fill=plan.fill,
                         unparented=unparented[table],
                         hierarchy=hierarchy,
                         copies=copies.get(table, {}),
@@ -351,6 +403,7 @@ class FakeDataGenerator:
         def keeps(code: str, entity: int) -> bool:
             return code not in written_for or entity in written_for[code]
 
+        tenant_column = self._spread.columns.get(display) if self._spread is not None else None
         for row_number, entity in enumerate(entities):
             parent = look_up.value_at(entity_key, table=display, row=row_number)
             first: Row = {}
@@ -359,6 +412,10 @@ class FakeDataGenerator:
                     written.entity_key: parent,
                     written.locale_key: look_up.locale_key(written.locale_table, locale.code),
                 }
+                if tenant_column is not None:
+                    found = cast("Spread", self._spread)
+                    values = cast("Sequence[object]", found.tenants.values)
+                    given[tenant_column] = values[found.rows[written.entity][row_number]]
                 row = self._row(
                     table_facts,
                     given,
@@ -627,7 +684,13 @@ class FakeDataGenerator:
             return "has a default, which PostgreSQL applies"
         return None
 
-    def _check_copies(self, table: str, plan: _Plan) -> dict[str, _Copy]:
+    def _check_copies(
+        self,
+        table: str,
+        tables: Mapping[str, TablePlan],
+        counts: Mapping[str, int],
+        existing: frozenset[str],
+    ) -> dict[str, _Copy]:
         """*table*'s copies, each with the key column and parent table it follows.
 
         Refused when the run cannot make one: into a column semis writes itself, through
@@ -636,22 +699,17 @@ class FakeDataGenerator:
         """
         facts = self._facts.facts_for(table)
         columns = {column.name: column for column in facts.columns}
-        overrides = plan.overrides.get(table, {})
+        plan = tables[table]
         resolved: dict[str, _Copy] = {}
-        for name, (key, source) in plan.copies.get(table, {}).items():
+        for name, (key, source) in plan.copies.items():
             column = columns.get(name)
-            reason = _left_out(
-                name,
-                column,
-                trusted=plan.trusted.get(table, frozenset()),
-                hierarchy=plan.hierarchies.get(table),
-            )
+            reason = _left_out(name, column, trusted=plan.trusted, hierarchy=plan.hierarchy)
             if column is None or reason is not None or (own := self._semis_own(column, facts)):
                 raise ScenarioError(
                     f"{table}.{name} {reason or own}, so it cannot be copied into",
                     resolution_hint="Copy into a value column semis would otherwise draw.",
                 )
-            parent = self._followed(facts, key, columns.get(key), plan)
+            parent = self._followed(facts, key, plan.trusted, counts, existing)
             if isinstance(parent, str):
                 raise ScenarioError(
                     f"{table}.{name} copies {key}.{source}, and {parent}",
@@ -660,7 +718,9 @@ class FakeDataGenerator:
                     ),
                 )
             origin = next((c for c in parent.columns if c.name == source), None)
-            unknown = self._unknown(parent, source, origin, plan)
+            unknown = self._unknown(
+                parent, source, origin, tables, unparented(parent, counts, existing=existing)
+            )
             if origin is None or unknown is not None:
                 raise ScenarioError(
                     f"{table}.{name} copies {parent.ref.display}.{source}, which {unknown}",
@@ -675,7 +735,7 @@ class FakeDataGenerator:
                     f"is {origin.type_key}: a copy is not cast",
                     resolution_hint="Copy a column of the same type.",
                 )
-            left = key in overrides or key in unparented(facts, plan.counts, existing=plan.existing)
+            left = key in plan.overrides or key in unparented(facts, counts, existing=existing)
             if column.not_null and left:
                 raise ScenarioError(
                     f"{table}.{name} is NOT NULL, and copies {key}, which the run leaves NULL",
@@ -687,57 +747,64 @@ class FakeDataGenerator:
         return resolved
 
     def _followed(
-        self, table: TableFacts, key: str, column: ColumnFacts | None, plan: _Plan
+        self,
+        table: TableFacts,
+        key: str,
+        trusted: frozenset[str],
+        counts: Mapping[str, int],
+        existing: frozenset[str],
     ) -> TableFacts | str:
         """The table *table*'s foreign key *key* points at, when the run writes it and
         draws the key; otherwise why a copy cannot follow it."""
+        column = next((c for c in table.columns if c.name == key), None)
         reference = column.foreign_key if column is not None else None
         parent = reference.table.display if reference is not None else ""
         if column is None or reference is None:
             reason = f"{key} is not a foreign key of {table.ref.display}"
-        elif key in plan.trusted.get(table.ref.display, frozenset()):
+        elif key in trusted:
             reason = f"{key} is trusted to a trigger"
         elif column.default is not None:
             reason = f"{key} has a default, which PostgreSQL applies"
         elif reference.table == table.ref:
             reason = f"{key} references {parent} itself"
-        elif parent in plan.existing:
+        elif parent in existing:
             reason = f"{parent} is under existing:, whose keys semis reads, not its columns"
-        elif parent not in plan.counts:
+        elif parent not in counts:
             reason = f"{parent} is not a table the run writes"
         else:
             return self._facts.facts_for(parent)
         return reason
 
     def _unknown(
-        self, parent: TableFacts, name: str, column: ColumnFacts | None, plan: _Plan
+        self,
+        parent: TableFacts,
+        name: str,
+        column: ColumnFacts | None,
+        tables: Mapping[str, TablePlan],
+        parentless: frozenset[str],
     ) -> str | None:
         """Why the run does not know the value of *parent*'s column *name* when its row is
         drawn; ``None`` when it does: the natural id, the slug, an override, a copy, or a
-        column semis draws."""
-        display = parent.ref.display
-        trusted = plan.trusted.get(display, frozenset())
-        hierarchy = plan.hierarchies.get(display)
-        reason = _left_out(name, column, trusted=trusted, hierarchy=hierarchy)
-        overrides = plan.overrides.get(display, {})
-        copied = plan.copies.get(display, {})
+        column semis draws. *parentless* are *parent*'s keys with no parent in the run."""
+        plan = tables.get(parent.ref.display, _NOT_PLANNED)
+        reason = _left_out(name, column, trusted=plan.trusted, hierarchy=plan.hierarchy)
         if (
             reason is not None
             or column is None
             or name in {parent.natural_id, self._identifier_column}
-            or name in overrides
-            or name in copied
+            or name in plan.overrides
+            or name in plan.copies
         ):
             return reason
         if column.default is not None:
             return "has a default, which PostgreSQL applies"
         left = self._left_null(
             parent,
-            overrides,
-            fill=plan.fill.get(display, frozenset()),
-            omitted=_omitted(trusted, hierarchy),
-            unparented=unparented(parent, plan.counts, existing=plan.existing),
-            copied=frozenset(copied),
+            plan.overrides,
+            fill=plan.fill,
+            omitted=_omitted(plan.trusted, plan.hierarchy),
+            unparented=parentless,
+            copied=frozenset(plan.copies),
         )
         return "the run leaves NULL" if name in left else None
 
@@ -806,6 +873,7 @@ class FakeDataGenerator:
                 copied=frozenset(copies),
                 resolver=resolver,
                 drawers=drawers,
+                tenant=self._tenant(table_facts.ref.display, index),
             )
             for name, copy in copies.items():
                 row[name] = self._copied(table_facts.ref.display, row, copy, resolver)
@@ -849,11 +917,13 @@ class FakeDataGenerator:
         drawers: Mapping[str, Callable[[], object]],
         words: Callable[[], str] | None = None,
         sequence: int | None = None,
+        tenant: int | None = None,
     ) -> Row:
         """One row. *points_at* names a hierarchy's parent column and the row it points at;
         every other self-FK, and a root's parent, is ``NULL``. A column in *copied* holds
         its place, for the caller to copy into once the row's keys are drawn. *drawers*
-        draws each column a provider fills, chosen once for the table."""
+        draws each column a provider fills, chosen once for the table. A row of *tenant*
+        points its keys within it at a parent of that tenant."""
         encoded = self._uuids.generate(table.table_code, sequence=sequence)
         fields = SemanticUUIDGenerator.decode(encoded)
         if table.ref.display in self._sequences:
@@ -882,12 +952,32 @@ class FakeDataGenerator:
                     else None
                 )
             elif column.foreign_key is not None:
-                row[column.name] = _resolver(resolver, column, table.ref.display).value_for(
-                    column, table=table.ref.display
-                )
+                row[column.name] = self._key(resolver, column, table.ref.display, tenant)
             else:
                 row[column.name] = drawers[column.name]()
         return row
+
+    def _key(
+        self, resolver: Resolver | None, column: ColumnFacts, table: str, tenant: int | None
+    ) -> object:
+        """The value *table*'s key *column* takes in its next row: round-robin over its
+        parent's rows, or, within *tenant*, over that tenant's."""
+        asked = _resolver(resolver, column, table)
+        found = self._spread
+        if tenant is None or found is None or column.name not in found.keys.get(table, ()):
+            return asked.value_for(column, table=table)
+        parent = cast("ColumnReference", column.foreign_key).table.display
+        rows = found.rows_in(parent, tenant)
+        turn = self._turns.get((table, column.name, tenant), 0)
+        self._turns[table, column.name, tenant] = turn + 1
+        return asked.value_at(column, table=table, row=rows[turn % len(rows)])
+
+    def _tenant(self, table: str, index: int) -> int | None:
+        """The tenant of *table*'s row *index*; ``None`` when it has none."""
+        found = self._spread
+        if found is None or table not in found.rows:
+            return None
+        return found.rows[table][index]
 
 
 def _left_out(

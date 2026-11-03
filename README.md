@@ -215,6 +215,20 @@ down from the organization a contact belongs to — so no UUID is computed by ha
       tenant_id: fk_customer_org.id   # the id of the organization fk_customer_org points at
 ```
 
+A project with tenants names its tenant column once, and a scenario then writes every
+tenant's rows from one file, each foreign key inside its row's tenant, so an isolation
+test has another tenant's rows to hide:
+
+```yaml
+tenancy:                           # in semis.yaml
+  column: tenant_id                # a table holding it is tenant-scoped
+  table: tenant.tb_organization    # its rows are the tenants: tenant_id holds their id
+```
+
+A scenario writing two organizations then spreads its contacts over two tenants, each
+contact's `tenant_id` its own organization's id; `crosses_tenants:` names a key that may
+point at another tenant's row, on purpose.
+
 From Python, a scenario runs through `ScenarioManager`, which writes one seed file per
 table. `semis pin` pins it: it writes `minimal_seed.pin.json` beside the scenario, the
 digest of the facts semis read and the facts themselves, so a replay against a moved

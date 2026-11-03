@@ -12,7 +12,7 @@ from faker import Faker
 
 from fraiseql_semis import faker_provider
 from fraiseql_semis.codes import TableCodes
-from fraiseql_semis.generator import FakeDataGenerator
+from fraiseql_semis.generator import FakeDataGenerator, TablePlan
 from fraiseql_semis.resolution import PrepSeedResolver
 from fraiseql_semis.schema import SchemaFacts
 from fraiseql_semis.translation import Locale, Translation, TranslationTable, faker_locale
@@ -51,17 +51,18 @@ def test_twenty_translated_tables_in_ten_locales_draw_at_the_prds_rate() -> None
     resolver = PrepSeedResolver()
     resolver.locales("catalog.tb_locale", {code: f"key-{code}" for code in CODES})
     generator = FakeDataGenerator(facts, 0x5009, seed=42)
-    translations = {
-        entity: Translation(
-            TranslationTable.of(facts, entity, entity.replace("tb_", "tl_")), locales
+    plans = {
+        entity: TablePlan(
+            ROWS,
+            translation=Translation(
+                TranslationTable.of(facts, entity, entity.replace("tb_", "tl_")), locales
+            ),
         )
         for entity in ENTITIES
     }
     drawn = 0
     started = time.perf_counter()
-    for table, stream in generator.walk(
-        dict.fromkeys(ENTITIES, ROWS), resolver=resolver, translations=translations
-    ):
+    for table, stream in generator.walk(plans, resolver=resolver):
         rows = list(stream)
         resolver.remember(table, rows)
         drawn += len(rows)
@@ -85,14 +86,15 @@ def test_a_run_makes_one_faker_per_declared_locale_and_one_for_its_tables(
     resolver = PrepSeedResolver()
     resolver.locales("catalog.tb_locale", {code: f"key-{code}" for code in CODES})
     generator = FakeDataGenerator(facts, 0x5009, seed=42)
-    translations = {
-        entity: Translation(
-            TranslationTable.of(facts, entity, entity.replace("tb_", "tl_")), locales
+    plans = {
+        entity: TablePlan(
+            2,
+            translation=Translation(
+                TranslationTable.of(facts, entity, entity.replace("tb_", "tl_")), locales
+            ),
         )
         for entity in ENTITIES
     }
-    for table, stream in generator.walk(
-        dict.fromkeys(ENTITIES, 2), resolver=resolver, translations=translations
-    ):
+    for table, stream in generator.walk(plans, resolver=resolver):
         resolver.remember(table, list(stream))
     assert len(made) == len(CODES) + 1

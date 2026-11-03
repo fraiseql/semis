@@ -89,7 +89,7 @@ the caller's transaction.
 ## Scenarios
 
 ```python
-ScenarioManager(facts, *, providers=None, libraries=(), staging=None, translations=None)
+ScenarioManager(facts, *, providers=None, libraries=(), staging=None, translations=None, tenancy=None)
 ScenarioManager.load(path, *, read_pin=True)
 ScenarioManager.execute(scenario, out_dir, *, connection=None, format=None, no_pin=False)
 ScenarioManager.apply(scenario, out_dir=None, *, connection, format=None, no_pin=False)
@@ -105,7 +105,10 @@ ScenarioManager.validate_seeds(seeds_dir, *, schema_dir, max_level=3, connection
 a mapping of names to providers, and its enabled `libraries`; a prep-seed scenario writes
 into `staging`'s twins, and `translations: true` names the table `translations`'s
 `TranslationRule(table, label_column, locale_fk, locale_table)` gives, as
-`Project.translations` holds it, the defaults when `semis.yaml` names none. `load` reads a scenario file, refusing a malformed one with
+`Project.translations` holds it, the defaults when `semis.yaml` names none. With
+`tenancy`, `TenancyRule(column, table=None, exclude=frozenset(), include={})` from
+`fraiseql_semis.tenancy`, as `Project.tenancy` holds it, a scenario's rows spread over
+its tenants. `load` reads a scenario file, refusing a malformed one with
 `ScenarioError`, and the pin `<name>.pin.json` beside it keeps, when there is one, as
 the scenario's `pin`; with `read_pin=False` it loads it unpinned, whatever that file
 holds.
@@ -156,20 +159,22 @@ another may apply the same scenario holds `exclusive` around its transaction too
 `semis reset` does.
 
 ```python
-Scenario(id, name, mode, tables, locale='en_US', seed=None, description='', pin=None, existing=(), locales=(), pseudo_locale=None, coverage={})
+Scenario(id, name, mode, tables, locale='en_US', seed=None, description='', pin=None, existing=(), locales=(), pseudo_locale=None, coverage={}, tenants=())
 ExistingTable(name, by=None, values=None)
 Scenario.for_run(*, scenario_id=None, seed=None, locale=None)
 ```
 
 A scenario built in Python is refused as a loaded one is. `tables` is a tuple of
 `TableSpec(name, count, …)`, each schema-qualified table with its `overrides`,
-`providers`, `fill`, `trusts_trigger`, `hierarchy`, `copies` and `translations`, as
+`providers`, `fill`, `trusts_trigger`, `hierarchy`, `copies`, `translations` and
+`crosses_tenants`, as
 [the scenario file](/reference/scenario-file/) names them; `copies` maps a column to a
 `Copied(key, column)`, the foreign key and the parent column it copies. `existing` is a tuple of `ExistingTable`, the
 tables a run takes parents from without writing them: every row, or those whose
 `by` column is one of `values`, in that order. `locales` is a tuple of
 `Locale(code, faker)`: a code of the locale table, and the Faker locale its translations
-are drawn in; `pseudo_locale` is the pseudo-locale's code, or `None`.
+are drawn in; `pseudo_locale` is the pseudo-locale's code, or `None`. `tenants` is a
+tuple of the tenant column's values, for a project whose tenant table is not in the run.
 `fraiseql_semis.translation.pseudo(text, length=None)` is the pseudo-locale's transform
 of a label, cut to `length` with both brackets kept, for a test that builds the label it
 expects. `for_run` returns the scenario with

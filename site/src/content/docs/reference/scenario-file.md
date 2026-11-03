@@ -42,6 +42,7 @@ tables:
 | `seed` | a whole number | none: without a seed, the values differ from run to run |
 | `tables` | a list of tables, at least one | required |
 | `existing` | a list of tables the run takes parents from and does not write | none. See [existing table keys](#existing-table-keys) |
+| `tenants` | a list of the tenant column's values, each once, for a project with no tenant table in the run | none: the tenants are the rows the run writes into, or names under `existing:` in, `semis.yaml`'s [tenant table](/reference/semis-yaml/#tenancy), if any. See [several tenants](/guides/tenants/) |
 
 A value of the wrong type is refused when the scenario loads, naming the scenario and the
 key, and so is a key that is not a string.
@@ -93,6 +94,7 @@ foreign keys, whatever the order of the list.
 | `hierarchy` | the tree of a table whose foreign key points at itself | none, and required for such a table unless its self-referencing key is overridden `null`, for a flat set, or trusted to a trigger |
 | `translations` | the schema-qualified table each row's translations are written to, one row per locale of `locales:`, or `true` for the table `semis.yaml`'s [translations rule](/reference/semis-yaml/#translations) names | none |
 | `copies` | a mapping of a column to `<foreign key>.<parent column>`: the column holds that column's value in the row the key points at | none. See [copied columns](#copied-columns) |
+| `crosses_tenants` | a list of keys into tenant-scoped tables that point at a parent of any tenant, round-robin | none: with tenants, every such key points within its row's tenant. See [several tenants](/guides/tenants/) |
 
 A list override with more or fewer values than `count` is refused, as is a column both
 overridden and trusted, and a provider no project or library registers. See

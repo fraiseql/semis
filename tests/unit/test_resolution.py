@@ -6,7 +6,7 @@ import pytest
 
 from fraiseql_semis.codes import TableCodes
 from fraiseql_semis.errors import ResolutionError
-from fraiseql_semis.generator import FakeDataGenerator, Row
+from fraiseql_semis.generator import FakeDataGenerator, Row, TablePlan
 from fraiseql_semis.resolution import PrepSeedResolver, ReadBackResolver, require_parents
 from fraiseql_semis.schema import (
     ColumnFacts,
@@ -26,7 +26,8 @@ def _prep_seed_run(facts: SchemaFacts, counts: dict[str, int]) -> dict[str, list
     resolver = PrepSeedResolver()
     generator = FakeDataGenerator(facts, scenario_id=0x5001, seed=42)
     run: dict[str, list[Row]] = {}
-    for table, stream in generator.walk(counts, resolver=resolver):
+    tables = {table: TablePlan(count) for table, count in counts.items()}
+    for table, stream in generator.walk(tables, resolver=resolver):
         rows = list(stream)
         resolver.remember(table, rows)
         run[table.ref.display] = rows
@@ -61,7 +62,7 @@ def test_a_cycle_raises_dependency_cycle_naming_the_tables() -> None:
     generator = FakeDataGenerator(facts, scenario_id=0x5001, seed=42)
     # Refused when the walk is asked for, before any table is generated.
     with pytest.raises(DependencyCycleError) as refusal:
-        generator.walk({"catalog.tb_egg": 1, "catalog.tb_hen": 1})
+        generator.walk({"catalog.tb_egg": TablePlan(1), "catalog.tb_hen": TablePlan(1)})
     assert [ref.display for ref in refusal.value.tables] == ["catalog.tb_egg", "catalog.tb_hen"]
 
 

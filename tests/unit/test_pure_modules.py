@@ -20,6 +20,7 @@ PURE = (
     "uuid_generator.py",
     "codes.py",
     "translation.py",
+    "tenancy.py",
     "providers/__init__.py",
     "providers/i18n.py",
     "providers/organization.py",

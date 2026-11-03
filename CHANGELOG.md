@@ -6,6 +6,29 @@ All notable changes to fraiseql-semis are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-03
+
+A scenario writes rows for several tenants from one file, each foreign key inside its
+row's tenant, so a test of tenant isolation has another tenant's rows to hide. The
+release is additive: a project without `tenancy:`, and a scenario without tenants, write
+what they wrote in 0.5.1.
+
+### Added
+
+- **Tenants** (fraiseql/semis#8): `semis.yaml`'s `tenancy:` names the tenant column once,
+  and the tenant table whose rows are the tenants; `exclude:` and `include:` override the
+  detection. A table holding the column is tenant-scoped, and so is a table whose key
+  points at a scoped one. A run's tenants are the rows it writes into the tenant table,
+  or names under `existing: where:` there, or else the scenario's `tenants:` values.
+  Each scoped row is written its tenant in the tenant column, round-robin, a tree in its
+  root's tenant, and each key into a scoped table points at a parent of that tenant. A
+  tenant whose child rows have no parent there is refused before a row is drawn, and so
+  is a scenario that names the tenant column another way. A table's `crosses_tenants:`
+  lets a key point at any tenant's row, on purpose. The run says what it spread:
+  `scenario s spreads app.tb_contact, app.tb_order over 2 tenants of app.tb_organization`.
+- `Project.tenancy`, `ScenarioManager(…, tenancy=)`, `Scenario.tenants` and
+  `TableSpec.crosses_tenants`; `TenancyRule` in `fraiseql_semis.tenancy`.
+
 ## [0.5.1] - 2026-11-02
 
 ### Fixed
@@ -401,7 +424,8 @@ The first release.
   prints, and requires fraiseql-confiture 1.27, whose `CONFIG_003` refusal of a
   `--database-url` no longer repeats the password either.
 
-[Unreleased]: https://github.com/fraiseql/semis/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/fraiseql/semis/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/fraiseql/semis/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/fraiseql/semis/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/fraiseql/semis/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/fraiseql/semis/compare/v0.3.0...v0.4.0

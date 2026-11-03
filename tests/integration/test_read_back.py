@@ -18,6 +18,7 @@ from fraiseql_semis import (
     emit,
     readback,
 )
+from fraiseql_semis.generator import TablePlan
 from fraiseql_semis.schema import TableFacts
 
 SCHEMA = "semis_rb"
@@ -67,7 +68,8 @@ def connection(schema: str) -> Iterator[psycopg.Connection]:
 
 def _read_back(connection: psycopg.Connection, out: Path, counts: dict[str, int]) -> None:
     generator = FakeDataGenerator(FACTS, scenario_id=0x5001, seed=42)
-    emit.read_back(connection, generator, counts, out)
+    tables = {table: TablePlan(count) for table, count in counts.items()}
+    emit.read_back(connection, generator, tables, out)
 
 
 def test_children_carry_learned_integers(connection: psycopg.Connection, tmp_path: Path) -> None:
@@ -140,7 +142,7 @@ def test_a_nullable_key_without_a_parent_is_applied_null(
 ) -> None:
     connection.execute(f"ALTER TABLE {COUNTRY} ALTER fk_continent DROP NOT NULL")
     generator = FakeDataGenerator(OPTIONAL, scenario_id=0x5001, seed=42)
-    emit.read_back(connection, generator, {COUNTRY: 3}, tmp_path)
+    emit.read_back(connection, generator, {COUNTRY: TablePlan(3)}, tmp_path)
     keys = [fk for (fk,) in connection.execute(f"SELECT fk_continent FROM {COUNTRY}")]
     assert keys == [None, None, None]
 

@@ -5,14 +5,15 @@ Pure: facts in, values out — no database and no file system.
 
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from faker import Faker
 from faker.config import AVAILABLE_LOCALES
 
-from fraiseql_semis.errors import RowContractError
-from fraiseql_semis.rows import Violation, declared_length
+from fraiseql_semis.checks import value_list
+from fraiseql_semis.errors import RowContractError, ScenarioError
+from fraiseql_semis.rows import Violation, canonical, declared_length
 from fraiseql_semis.schema import ColumnFacts
 
 LOCALES = frozenset(AVAILABLE_LOCALES)
@@ -67,6 +68,14 @@ _BY_TYPE: dict[str, Callable[[Faker], object]] = {
     "time": lambda f: _instant(f).time(),
     "uuid": lambda f: f.uuid4(cast_to=None),
 }
+_JSON = frozenset({"json", "jsonb"})
+# An array, or a json object, holds this many values at most: enough to show a list.
+_MOST = 3
+
+
+def _object(faker: Faker) -> dict[str, str]:
+    """A small json object: one to three distinct words, each mapped to a word."""
+    return {key: faker.word() for key in faker.words(faker.random_int(1, _MOST), unique=True)}
 
 
 @dataclass(frozen=True)
@@ -158,10 +167,13 @@ class CustomProviderRegistry:
 class FakerProvider:
     """A value per column, drawn from one seeded ``Faker`` so a run is reproducible.
 
-    The choice runs: a registered provider, then an enum's labels, then a library rule
-    the column matches, then a provider named by the column's name, then one whose name
-    the column's contains, then one for its type. A type nothing covers yields ``None``,
-    and the row contract decides. Text is cut to the length the column declares.
+    The choice runs: a registered provider, then an enum's labels, then the values a
+    CHECK lists, round-robin, then a library rule the column matches, then a provider
+    named by the column's name, then one whose name the column's contains, then one for
+    its type. A json column is a small object of words; an array, one to three values
+    each drawn as a column of its element type and its name would be, unless a provider
+    is registered for the array by name. A type nothing covers is refused (``draws``
+    says which). Text is cut to the length the column declares.
 
     A ``unique`` column never repeats a value within the run, per qualified table.
     """
@@ -180,6 +192,8 @@ class FakerProvider:
         # The values each unique column has used, per (table, column): *used*, when the
         # providers of one run's locales share it, so a value is never drawn twice.
         self._used: dict[tuple[str, str], set[object]] = {} if used is None else used
+        # Per (table, column) drawn from a CHECK's list, the turn of its next value.
+        self._turns: dict[tuple[str, str], int] = {}
 
     def value_for(self, column: ColumnFacts, *, table: str) -> object:
         """A value for *column* of the qualified *table*."""
@@ -194,8 +208,17 @@ class FakerProvider:
 
         Choosing consumes no randomness, so a table's drawers can be chosen before its
         first row and the run still draws the same values.
+        A column of a type nothing covers is refused, naming it and its type.
         """
         draw = self._choose(column, table)
+        if draw is None:
+            raise ScenarioError(
+                f"{table}.{column.name} is {column.type_key}, a type semis does not draw",
+                resolution_hint=(
+                    "Override it, or give it a provider; a nullable column is left NULL "
+                    "unless fill: names it."
+                ),
+            )
         if not column.unique:
             return draw
         used = self._used.setdefault((table, column.name), set())
@@ -203,8 +226,9 @@ class FakerProvider:
         def distinct() -> object:
             for _ in range(_REDRAWS):
                 value = draw()
-                if value is None or value not in used:
-                    used.add(value)
+                key = canonical(value)
+                if value is None or key not in used:
+                    used.add(key)
                     return value
             found = f"{_REDRAWS} draws each repeated a value this run already used"
             raise RowContractError(
@@ -217,14 +241,46 @@ class FakerProvider:
 
         return distinct
 
-    def _choose(self, column: ColumnFacts, table: str) -> Callable[[], object]:
+    def draws(self, column: ColumnFacts, *, table: str) -> bool:
+        """Whether a value can be drawn for *column* of the qualified *table*."""
+        return self._choose(column, table) is not None
+
+    def _choose(self, column: ColumnFacts, table: str) -> Callable[[], object] | None:
+        """What draws *column*: what the scenario and the schema name for it, else what
+        its type draws; ``None`` when nothing does."""
+        return self._named(column, table) or self._typed(column, table)
+
+    def _named(self, column: ColumnFacts, table: str) -> Callable[[], object] | None:
+        """A registered provider, an enum's labels, or a CHECK's list of values, taken
+        round-robin over the run. A global provider draws an array's elements, not the
+        array."""
         faker = self.faker
         custom = self._registry.provider_for(table, column.name)
-        if custom is not None:
+        if custom is not None and (
+            not _is_array(column) or self._registry.names(table, column.name)
+        ):
             return lambda: custom(faker, column)
         labels = column.enum_values
         if labels is not None:
             return lambda: faker.random_element(labels)
+        allowed = _allowed(column)
+        if allowed is None:
+            return None
+        turns, key = self._turns, (table, column.name)
+
+        def next_value() -> object:
+            turn = turns.get(key, 0)
+            turns[key] = turn + 1
+            return allowed[turn % len(allowed)]
+
+        return next_value
+
+    def _typed(self, column: ColumnFacts, table: str) -> Callable[[], object] | None:
+        faker = self.faker
+        if _is_array(column):
+            return self._array(column, table)
+        if column.type_key in _JSON:
+            return lambda: _object(faker)
         matched = self._registry.matching(column)
         if matched is not None:
             return _fitting(lambda: matched(faker, column), column)
@@ -241,7 +297,15 @@ class FakerProvider:
                 left_digits=precision - scale, right_digits=scale, positive=True
             )
         by_type = _BY_TYPE.get(family)
-        return (lambda: None) if by_type is None else (lambda: by_type(faker))
+        return None if by_type is None else (lambda: by_type(faker))
+
+    def _array(self, column: ColumnFacts, table: str) -> Callable[[], object] | None:
+        """One to three values of *column*'s element type; ``None`` when it is not drawn."""
+        element = self._choose(_element(column), table)
+        if element is None:
+            return None
+        faker, draw = self.faker, element
+        return lambda: [draw() for _ in range(faker.random_int(1, _MOST))]
 
     def word(self) -> str:
         """One word, from the same seeded source as every value."""
@@ -259,6 +323,36 @@ class FakerProvider:
 def _family(column: ColumnFacts) -> str:
     """The type without its modifiers: ``varchar`` for ``varchar(20)``."""
     return (column.type_key or "").split("(")[0]
+
+
+def _allowed(column: ColumnFacts) -> tuple[object, ...] | None:
+    """The values *column*'s CHECKs list, those every list allows, in the first's order;
+    ``None`` when no CHECK is a list, or the lists share no value."""
+    lists = [
+        found for check in column.checks if (found := value_list(column.name, check)) is not None
+    ]
+    if not lists:
+        return None
+    first, *others = lists
+    return tuple(value for value in first if all(value in other for other in others)) or None
+
+
+def _is_array(column: ColumnFacts) -> bool:
+    return (column.type_key or "").endswith("[]")
+
+
+def _element(column: ColumnFacts) -> ColumnFacts:
+    """*column*'s element, as a NOT NULL column of the same name: ``varchar(4)`` for
+    ``varchar(4)[]``, ``integer`` for ``integer[][]``."""
+    return replace(
+        column,
+        type_key=(column.type_key or "").split("[")[0],
+        raw_sql_type=(column.raw_sql_type or "").split("[")[0],
+        not_null=True,
+        default=None,
+        unique=False,
+        checks=(),
+    )
 
 
 def _fitting(draw: Callable[[], object], column: ColumnFacts) -> Callable[[], object]:

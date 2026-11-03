@@ -1,7 +1,7 @@
 # Architecture: fraiseql-semis
 
-**Version**: 1.1
-**Date**: 2026-10-08
+**Version**: 1.2
+**Date**: 2026-11-03
 **Depends on**: `fraiseql-confiture>=1.32,<2`, Python 3.14
 **Companion documents**: [PRD.md](./PRD.md) (what semis is for), [../README.md](../README.md) (how it is used)
 
@@ -78,6 +78,7 @@ composes DDL, and never emits an `INSERT` or a `COPY` block by hand; each is one
 | `readback.py` | Every statement semis runs: a scenario's lock, the already-applied check, an existing table's keys, learning a parent's `pk_*` after its seed is applied, a hierarchy's paths, and the reset's lock, check, delete and restart | **`psycopg`** |
 | `uuid_generator.py` | `SemanticUUIDGenerator` — encode and decode | — |
 | `faker_provider.py` | `FakerProvider`, `CustomProviderRegistry`, `Library`, `Rule` — what a value looks like | — |
+| `checks.py` | `value_list` — a CHECK read as the values it lists, when it is a plain list | — |
 | `rows.py` | The row contract: is this row emittable (§6) | — |
 | `generator.py` | `FakeDataGenerator` — assembling a row from facts, providers and UUIDs | — |
 | `resolution.py` | The two FK modes, over `ColumnFacts.foreign_key` | — |
@@ -147,7 +148,7 @@ nothing is a failure:
 
 Everything under `generator.py`, `rows.py`, `faker_provider.py`, `resolution.py`,
 `hierarchy.py`, `staging.py`, `translation.py`, `tenancy.py`, `pin.py`, `uuid_generator.py`,
-`codes.py` and `providers/`
+`codes.py`, `checks.py` and `providers/`
 is pure: facts in, values out, no database and no file
 system. That is what lets the row contract be tested against a DDL string with no
 PostgreSQL anywhere.
@@ -473,7 +474,8 @@ row is emittable when, for every column in `TableFacts.columns`:
 | `type_key` carries a length — `varchar(n)`, `char(n)`; `raw_sql_type` says `bpchar(n)` | the value fits |
 | `unique` | the value has not been used for that column earlier in the run |
 | `foreign_key` | the value came from `resolution.py`, never from a provider |
-| `checks` | reported, not enforced — semis does not evaluate SQL expressions (§11) |
+| `checks` | a plain list of values is drawn from (D51); any other is reported, not enforced — semis does not evaluate SQL expressions (§11) |
+| `type_key` semis does not draw | the scenario gives the value — an override, a provider, a trigger — or the column is refused before a row is drawn (D50) |
 
 **A row failing the contract is refused, not emitted** (D4). The alternative is that the
 gap surfaces at apply time as a constraint violation naming a file and no line, long after
@@ -737,8 +739,10 @@ semis does not:
 - order tables itself — `dependency_order` does;
 - generate DDL, migrations or `ALTER` statements — that is confiture's whole other half;
 - evaluate CHECK expressions. A CHECK is reported to the provider that generates the value
-  and pinned by §8, so a provider can satisfy `iso_code ~ '^[A-Z]{2}$'` deliberately; semis
-  does not parse SQL to infer what would satisfy it. PostgreSQL is the judge, at apply time;
+  and pinned by §8, so a provider can satisfy `iso_code ~ '^[A-Z]{2}$'` deliberately. semis
+  reads one shape, a plain list of values (`col IN (…)`, stored `col = ANY (ARRAY[…])`),
+  to draw from it (D51), and infers nothing from any other. PostgreSQL is the judge, at
+  apply time;
 - own the prep-seed resolution functions. They are the project's, and `validate_seeds`
   checks them;
 - hold a UUID→integer map. The integers are PostgreSQL's, and a parent's key is learned
@@ -798,6 +802,10 @@ semis does not:
 | D46 | `semis.yaml`'s `tenancy:` names the tenant column, and optionally the tenant table (its rows are the tenants, the column holds their natural id), `exclude:` (holds the column, belongs to no tenant) and `include:` (a table whose tenant column is named otherwise). A table is scoped when it holds the column, or when a drawn key not under `crosses_tenants:` points at a scoped table; the tenant table is the dimension, and its own keys point anywhere. A run's tenants are its tenant table's rows, written or named by `existing: where:` (a whole-table read refused, so a run's shape never follows the database), else the scenario's `tenants:`; both at once refused. The rule is configuration and not pinned | owner, 2026-11-02 (fraiseql/semis#8) |
 | D47 | A scoped row's tenant: the tenant table's row *i* is tenant *i*; a tree's root round-robin, a child its parent's; a translation row its entity's; any other row *i mod k*. Each key into a scoped table points at its parent's rows of the row's tenant, round-robin per key and tenant; a tenant the child has rows in and the parent, which has rows, none is refused before a row is drawn, NOT NULL or nullable. A key into an `existing:` table holding the tenant column, other than the tenant table, is refused unless it crosses: semis reads no tenants of rows it did not write. UUIDs and drawn values do not move | owner, 2026-11-02 (fraiseql/semis#8) |
 | D48 | With tenants, the tenant column is the run's: written its tenant's value whatever its default, and refused when overridden, copied, filled, trusted or given a provider; a tenant column that is a foreign key is a key into the tenant table, refused when it points elsewhere. `copies:` through a key follows the parent the key points at within its tenant, so a copy of the parent's id, as `tenant_id: fk_customer_org.id` was written before, is the dimension's own value. `crosses_tenants: [key]` keeps a key round-robin over every parent row; one into an unscoped table is refused | owner, 2026-11-02 (fraiseql/semis#8) |
+| D49 | A `json` or `jsonb` column is drawn as an object of one to three distinct Faker words, each mapped to a word; an array column as one to three values, each drawn as a NOT NULL column of the element's type and the array's name would be, a provider registered for the array by name drawing the whole array. An array of an enum is not drawn: its labels are not among the column's facts, so the pin would not see them move. A unique json or array value is compared by its canonical form | fraiseql/semis#10, 2026-11-03 |
+| D50 | A column the run would draw and no provider covers is refused before a row is drawn, naming the column and its type: NOT NULL with no default, or named under `fill: [..]`. `fill: all` leaves it `NULL` and names it in the run's line: `all` is every column semis can draw | fraiseql/semis#10, 2026-11-03 |
+| D51 | A column whose CHECKs include a plain list of values — `col IN (…)` or `col = ANY (ARRAY[…])`, the column and the values maybe cast — is drawn from the list, round-robin per table and column over the run, after a registered provider and an enum's labels, before a library rule; two lists draw from the values both allow. The list is read from `ColumnFacts.checks` (confiture 1.32 on, DDL and live, measured) by the pure `checks.py`, parsed, never evaluated; the checks are already pinned | fraiseql/semis#11, 2026-11-03 |
+| D52 | `fill: all` leaves the soft-delete columns, `deleted_at` and `deleted_by` by name, `NULL`, and the run says so; a `fill:` list, an override or a provider writes them. The names are fixed, not a `semis.yaml` key: they are the trinity convention, so a project following it configures nothing, and one naming them otherwise overrides them `null` as before. Not pinned: a rule of semis, not a fact of the schema | fraiseql/semis#12, 2026-11-03 |
 
 ### On the UUID encoding's own arithmetic (D6)
 

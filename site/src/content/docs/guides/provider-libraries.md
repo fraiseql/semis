@@ -49,8 +49,8 @@ scenario naming it:
 `min_length` keeps a three-letter code out of a `char(2)`. A rule naming a provider the
 library does not hold is refused when the library is built.
 
-An enabled library's rules come after a scenario's own providers and an enum's labels,
-and before semis' built-in providers. Libraries are consulted in the order `semis.yaml`
+An enabled library's rules come after a scenario's own providers, an enum's labels and
+a CHECK's list of values, and before semis' built-in providers. Libraries are consulted in the order `semis.yaml`
 lists them, and within a library in the order of its rules.
 
 ## Register the entry point

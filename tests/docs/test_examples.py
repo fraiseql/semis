@@ -1196,6 +1196,31 @@ def _key_left_null(block: Block, context: Context) -> None:
     assert manager.check(manager.load(path), no_pin=True)[1:] == (block.text,)
 
 
+@check(
+    _page("reference/scenario-file.md"),
+    "shop.tb_customer leaves deleted_at NULL; fill: all leaves soft-delete columns NULL: "
+    "fill: [deleted_at] writes one",
+)
+def _soft_delete_left_null(block: Block, context: Context) -> None:
+    manager = ScenarioManager(_facts(SHOP, {"shop.tb_customer": 0x0B}))
+    tables = "  - name: shop.tb_customer\n    count: 3\n    fill: all\n"
+    path = _scenario_file(context.tmp_path, tables, mode="read-back")
+    assert manager.check(manager.load(path), no_pin=True)[1:] == (block.text,)
+
+
+@check(
+    _page("reference/scenario-file.md"),
+    "shop.tb_customer leaves last_ip NULL; semis draws no inet: an override or a provider "
+    "writes them",
+)
+def _undrawn_left_null(block: Block, context: Context) -> None:
+    ddl = SHOP.replace("deleted_at timestamptz,", "last_ip inet,")
+    manager = ScenarioManager(_facts(ddl, {"shop.tb_customer": 0x0B}))
+    tables = "  - name: shop.tb_customer\n    count: 3\n    fill: all\n"
+    path = _scenario_file(context.tmp_path, tables, mode="read-back")
+    assert manager.check(manager.load(path), no_pin=True)[1:] == (block.text,)
+
+
 @check(_page("reference/scenario-file.md"), "copies:")
 def _copies_shape(block: Block, context: Context) -> None:
     """The fragment loads as one table's copies, the key and parent column apart."""

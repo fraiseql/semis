@@ -23,15 +23,18 @@ For every column semis writes, a row is complete when:
 | a declared length, `varchar(n)` or `char(n)` | the value fits |
 | UNIQUE | the value has not been used for that column earlier in the run |
 | a foreign key | the value came from the parent rows of the run, never from a provider |
-| a CHECK | reported to the provider that draws the value, not evaluated |
+| a type semis does not draw | the scenario gives the value, or the column is refused before a row is drawn |
+| a CHECK listing values, `col IN (…)` | the value is drawn from the list |
+| any other CHECK | reported to the provider that draws the value, not evaluated |
 
-A CHECK is not evaluated because semis does not evaluate SQL expressions. PostgreSQL
-judges it at apply time, and a [schema pin](/concepts/schema-pins/) records it, so a
-changed CHECK moves the pin.
+A CHECK is not evaluated because semis does not evaluate SQL expressions: it reads one
+shape, a plain list of values, to draw from it. PostgreSQL judges every CHECK at apply
+time, and a [schema pin](/concepts/schema-pins/) records it, so a changed CHECK moves the
+pin.
 
-## A refused row
+## A refused column
 
-This contact table has a NOT NULL `JSONB` column with no default, and its prep-seed twin:
+This contact table has a NOT NULL `INET` column with no default, and its prep-seed twin:
 
 ```sql title="db/schema.sql"
 CREATE SCHEMA crm;
@@ -41,7 +44,7 @@ CREATE TABLE crm.tb_contact (
     id UUID NOT NULL UNIQUE,
     identifier TEXT NOT NULL UNIQUE,
     email VARCHAR(120) NOT NULL,
-    preferences JSONB NOT NULL
+    last_ip INET NOT NULL
 );
 
 CREATE SCHEMA prep_seed;
@@ -50,7 +53,7 @@ CREATE TABLE prep_seed.tb_contact (
     id UUID NOT NULL UNIQUE,
     identifier TEXT NOT NULL,
     email VARCHAR(120),
-    preferences JSONB
+    last_ip INET
 );
 ```
 
@@ -72,19 +75,19 @@ tables:
     count: 5
 ```
 
-No provider draws a `JSONB` value, so the column's value is `NULL`, and the first row is
-refused before anything is written:
+semis draws no `INET` value, so the column is refused before a row is drawn or a file
+written:
 
 ```bash
 semis seeds scenarios/contacts.yaml --dry-run
 ```
 
 ```text
-scenario contacts: crm.tb_contact.preferences is NOT NULL, but its value is None
-Hint: Give the column a value that satisfies it, or a default in the schema; if a trigger fills it, name it under trusts_trigger for this table.
+scenario contacts: crm.tb_contact.last_ip is inet, a type semis does not draw
+Hint: Override it, or give it a provider; a nullable column is left NULL unless fill: names it.
 ```
 
-The command exits 1. The hint names the three ways out.
+The command exits 1. The hint names two ways out; a trigger is the third.
 
 ## Give the column a value
 
@@ -100,7 +103,7 @@ tables:
   - name: crm.tb_contact
     count: 5
     overrides:
-      preferences: '{"newsletter": false}'
+      last_ip: 192.0.2.1
 ```
 
 ```bash
@@ -109,7 +112,7 @@ semis seeds scenarios/contacts.yaml --dry-run --verbose
 
 ```text
 scenario contacts is unpinned: its schema is not checked
-would write 001_prep_seed.tb_contact.sql  5 rows  insert: id, identifier, email, preferences
+would write 001_prep_seed.tb_contact.sql  5 rows  insert: id, identifier, email, last_ip
 ```
 
 ## Trust a trigger
@@ -126,7 +129,7 @@ seed: 42
 tables:
   - name: crm.tb_contact
     count: 5
-    trusts_trigger: [preferences]     # a trigger fills it
+    trusts_trigger: [last_ip]         # a trigger fills it
 ```
 
 ```bash

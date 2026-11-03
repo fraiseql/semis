@@ -115,7 +115,10 @@ prints a line per table naming the columns it left `NULL`.
     fill: [created_by]                # drawn; deleted_at is written NULL
 ```
 
-`fill: all` draws every nullable column of the table, as 0.1.0 did. See
+`fill: all` draws every nullable column of the table but two kinds, each named in the
+run's line: the soft-delete columns, `deleted_at` and `deleted_by`, so no row arrives
+deleted, and a column of a type semis does not draw. A `fill:` list or an override
+writes a soft-delete column, for deleted rows on purpose. See
 [which columns are drawn](/reference/scenario-file/#which-columns-are-drawn).
 
 ## Providers
@@ -134,16 +137,26 @@ A column that neither an override nor a scenario's provider names is drawn by th
 of these that applies:
 
 1. the column's enum labels, when its type is an enum;
-2. a rule of a library `semis.yaml` enables, in the order it lists them: `lang VARCHAR(2)`
+2. the values a CHECK lists, round-robin over the run: `role TEXT CHECK (role IN
+   ('manager', 'sales'))` receives `manager`, `sales`, `manager`, …;
+3. a rule of a library `semis.yaml` enables, in the order it lists them: `lang VARCHAR(2)`
    receives `fr`;
-3. a built-in provider for the column's name: `email`, `city`, `company`, `url` and others;
-4. a built-in provider for the column's type: integers, decimals within their precision,
-   booleans, dates and times, UUIDs, and a word for text.
+4. a built-in provider for the column's name: `email`, `city`, `company`, `url` and others;
+5. a built-in provider for the column's type: integers, decimals within their precision,
+   booleans, dates and times, UUIDs, a word for text, and for `json` and `jsonb` a small
+   object of words, `{"cardigan": "solution"}`.
+
+An array column holds one to three values, each drawn as a column of its element type
+and the array's name would be: `emails TEXT[]` holds emails. A provider named for the
+array draws the whole array. A CHECK that is not a plain list of values — a range, a
+pattern, a function — is not read: PostgreSQL judges it at apply time.
 
 Text these draw is cut to the length the column declares; a value a scenario's own
-provider draws is not, and one too long is refused. A type no provider covers draws
-`NULL`, and the row contract refuses it when the column is NOT NULL. A UNIQUE column never repeats
-a value within the run. [Shipped provider libraries](/reference/providers/) lists every
+provider draws is not, and one too long is refused. A type none of these covers —
+`inet`, `bytea`, an array of an enum — is refused before a row is drawn, naming the
+column and its type, when the run would draw it: NOT NULL with no default, or named
+under `fill:`. An override, a provider or `trusts_trigger:` gives it a value. A UNIQUE
+column never repeats a value within the run. [Shipped provider libraries](/reference/providers/) lists every
 rule.
 
 ### A project's own providers

@@ -195,7 +195,8 @@ semis pin scenarios/customers.yaml -d postgresql:///shop_dev
 A nullable column that is not a key — a soft-delete or an audit column — is written
 `NULL` unless the scenario names it: by an override, by a provider for it, or under
 `fill:`, so a scenario with no overrides writes rows every view sees. The run names, per
-table, the columns it left `NULL`; `fill: all` draws every one.
+table, the columns it left `NULL`; `fill: all` draws every one but the soft-delete columns,
+`deleted_at` and `deleted_by`, and a type semis does not draw.
 
 ```yaml
   - name: shop.tb_customer
@@ -297,6 +298,12 @@ printed most severe first, each with its file and line and confiture's hint, and
 Python builds directly, with no file.
 
 ### Providers
+
+Before any library, the schema says what it can: an enum's labels, the values a CHECK
+lists (`role IN ('manager', 'sales')`, round-robin), a small object of words for `json`
+and `jsonb`, and for an array one to three values of its element type. A column of a type
+semis does not draw (`inet`, `bytea`) is refused before a row is drawn when the run would
+draw it, naming the column and its type.
 
 semis ships two provider libraries — `i18n` (ISO country, language and currency codes,
 locales, time zones) and `organization` (company names, SIREN/SIRET and French VAT

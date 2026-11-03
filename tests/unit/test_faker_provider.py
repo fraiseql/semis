@@ -107,10 +107,6 @@ def test_timestamptz_is_aware() -> None:
     assert value.tzinfo is not None
 
 
-def test_a_type_no_provider_covers_yields_none() -> None:
-    assert _one(_column("x", "inet")) is None
-
-
 def test_registry_beats_name_pattern_and_type() -> None:
     registry = CustomProviderRegistry()
     registry.register_column(PRODUCT, "email", lambda _faker, _facts: "column")

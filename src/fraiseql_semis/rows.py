@@ -4,6 +4,7 @@ Confiture's writers check a row's shape, not its completeness or its values; thi
 where both are checked. Pure: facts and a row in, violations out.
 """
 
+import json
 import re
 from collections.abc import Container, Iterator, Mapping
 from dataclasses import dataclass
@@ -33,6 +34,16 @@ def declared_length(column: ColumnFacts) -> int | None:
     """The most characters *column* holds, when its type declares a length."""
     match = _LENGTH.fullmatch(column.type_key or "")
     return int(match.group(1)) if match else None
+
+
+def canonical(value: object) -> object:
+    """*value* as a unique column's values are compared: a list as a tuple, an object as
+    its JSON with sorted keys, so a json or array value can be remembered in a set."""
+    if isinstance(value, list | tuple):
+        return tuple(canonical(item) for item in value)
+    if isinstance(value, Mapping):
+        return json.dumps(value, sort_keys=True, default=str)
+    return value
 
 
 def check_row(
@@ -97,5 +108,5 @@ def _failures(
     length = declared_length(column)
     if length is not None and len(str(value)) > length:
         yield column.type_key or "", f"{value!r} has {len(str(value))} characters"
-    if column.unique and value in seen:
+    if column.unique and canonical(value) in seen:
         yield "unique", f"{value!r} was already used in this run"

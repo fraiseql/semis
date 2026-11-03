@@ -3,7 +3,7 @@
 Pure: facts in, rows out — no database and no file system.
 """
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from typing import Literal, NamedTuple, TypeGuard, cast
@@ -12,7 +12,7 @@ from fraiseql_semis.errors import ResolutionError, RowContractError, ScenarioErr
 from fraiseql_semis.faker_provider import CustomProviderRegistry, FakerProvider
 from fraiseql_semis.hierarchy import Hierarchy
 from fraiseql_semis.resolution import Resolver, require_parents, unparented
-from fraiseql_semis.rows import declared_length, require_row
+from fraiseql_semis.rows import canonical, declared_length, require_row
 from fraiseql_semis.schema import ColumnFacts, ColumnReference, SchemaFacts, TableFacts
 from fraiseql_semis.tenancy import Spread, TenancyRule, Tenants, spread
 from fraiseql_semis.translation import (
@@ -72,6 +72,10 @@ class TablePlan:
     translation: Translation | None = None
     crosses: frozenset[str] = frozenset()
 
+
+SOFT_DELETE = frozenset({"deleted_at", "deleted_by"})
+"""The soft-delete columns, by the trinity convention's names: ``fill: all`` leaves them
+``NULL``, so no row it writes arrives deleted."""
 
 _NOT_PLANNED = TablePlan(0)
 """What a run says of a table it has no plan for: a translation table, whose rows follow
@@ -252,6 +256,8 @@ class FakeDataGenerator:
                 },
             )
             tables = self._with_tenants(tables, self._spread)
+        for table in order:
+            self._require_drawn(table, tables, translated)
         return self._walk(
             order,
             tables,
@@ -263,6 +269,71 @@ class FakeDataGenerator:
             translations=translated,
             resolver=resolver,
         )
+
+    def _require_drawn(
+        self, table: str, tables: Mapping[str, TablePlan], translated: Mapping[str, Translation]
+    ) -> None:
+        """Refuse a column of *table* the run would draw and semis cannot, before a row is
+        drawn."""
+        table_facts = self._facts.facts_for(table)
+        if table in translated:
+            found = self._spread
+            tenant = found.columns.get(table) if found is not None else None
+            self._drawers(
+                self._values,
+                table_facts,
+                given=frozenset() if tenant is None else frozenset({tenant}),
+                omitted=frozenset(),
+                left_null=self._left_null(
+                    table_facts,
+                    {},
+                    fill=frozenset({translated[table].table.label}),
+                    omitted=frozenset(),
+                    unparented=frozenset(),
+                ),
+                copied=frozenset(),
+            )
+            return
+        plan = tables[table]
+        omitted = _omitted(plan.trusted, plan.hierarchy)
+        self._drawers(
+            self._values,
+            table_facts,
+            given=plan.overrides.keys(),
+            omitted=omitted,
+            left_null=self._left_null(
+                table_facts,
+                plan.overrides,
+                fill=plan.fill,
+                omitted=omitted,
+                unparented=frozenset(),
+                copied=frozenset(plan.copies),
+            ),
+            copied=frozenset(plan.copies),
+        )
+
+    def _drawers(  # noqa: PLR0913 — whose drawers positionally; which columns by keyword
+        self,
+        provider: FakerProvider,
+        table: TableFacts,
+        *,
+        given: Collection[str],
+        omitted: frozenset[str],
+        left_null: frozenset[str],
+        copied: frozenset[str],
+    ) -> dict[str, Callable[[], object]]:
+        """What draws each column of *table* a row takes from a provider: every column
+        but the *given*, *omitted*, *left_null* and *copied* ones, a default's, and those
+        semis writes itself. A column semis cannot draw is refused here."""
+        display = table.ref.display
+        return {
+            column.name: provider.drawer(column, table=display)
+            for column in table.columns
+            if column.name not in given
+            and column.name not in omitted | left_null | copied
+            and column.default is None
+            and self._semis_own(column, table) is None
+        }
 
     @staticmethod
     def _with_tenants(tables: Mapping[str, TablePlan], found: Spread) -> dict[str, TablePlan]:
@@ -351,16 +422,19 @@ class FakeDataGenerator:
             omitted=frozenset(),
             unparented=unparented,
         )
+        tenant = self._spread.columns.get(display) if self._spread is not None else None
         drawn = []
         for locale in translation.locales:
             provider = self._locale_provider(locale)
             provider.faker.seed_instance(seed_for(self._seed, written.table, locale.code))
-            drawers = {
-                column.name: (
-                    _null if column.name in left_null else provider.drawer(column, table=display)
-                )
-                for column in table_facts.columns
-            }
+            drawers = self._drawers(
+                provider,
+                table_facts,
+                given=frozenset() if tenant is None else frozenset({tenant}),
+                omitted=frozenset(),
+                left_null=left_null,
+                copied=frozenset(),
+            )
             drawn.append((locale, provider, drawers))
         return self._draw_translations(
             table_facts,
@@ -487,7 +561,7 @@ class FakeDataGenerator:
                         display, column.name, label, default[written.label], sources
                     )
                 row[column.name] = label
-            elif column.unique and column.name in row and column.name not in own:
+            elif column.unique and column.name in drawers and column.name not in own:
                 row[column.name] = drawers[column.name]()
         return row
 
@@ -589,14 +663,14 @@ class FakeDataGenerator:
             unparented=unparented,
             copied=frozenset(copies),
         )
-        drawers = {
-            column.name: (
-                _null
-                if column.name in left_null or column.name in copies
-                else self._values.drawer(column, table=table_facts.ref.display)
-            )
-            for column in table_facts.columns
-        }
+        drawers = self._drawers(
+            self._values,
+            table_facts,
+            given=overrides.keys(),
+            omitted=omitted,
+            left_null=left_null,
+            copied=frozenset(copies),
+        )
         return self._draw(
             table_facts,
             indexes,
@@ -654,21 +728,24 @@ class FakeDataGenerator:
         and each key in *unparented* neither overridden ``null`` nor omitted.
 
         A value column is named by an override, a provider registered for it by name, or
-        *fill*; a column in *omitted* is left out of the row. A key with no parent in the
-        run is never drawn, whatever *fill* says.
+        *fill*; ``all`` names every one semis can draw but the soft-delete columns. A
+        column in *omitted* is left out of the row. A key with no parent in the run is never drawn, whatever *fill* says.
         """
         keys = unparented - overrides.keys() - omitted
-        if fill == "all":
-            return keys
         display = table.ref.display
         return keys | frozenset(
             column.name
             for column in table.columns
             if self._fillable(column, table) is None
-            and column.name not in omitted | fill
+            and column.name not in omitted
             and column.name not in overrides
             and column.name not in copied
             and not self._values.names(column, table=display)
+            and (
+                column.name not in fill
+                if fill != "all"
+                else column.name in SOFT_DELETE or not self._values.draws(column, table=display)
+            )
         )
 
     def _fillable(self, column: ColumnFacts, table: TableFacts) -> str | None:
@@ -894,7 +971,7 @@ class FakeDataGenerator:
         require_row(table_facts, row, trusted=trusted, seen=seen)
         for column in table_facts.columns:
             if column.unique and row.get(column.name) is not None:
-                seen.setdefault(column.name, set()).add(row[column.name])
+                seen.setdefault(column.name, set()).add(canonical(row[column.name]))
 
     def _copied(self, table: str, row: Row, copy: _Copy, resolver: Resolver | None) -> object:
         """*copy*'s parent column in the row *table*'s *row* points at; ``NULL`` when its

@@ -19,6 +19,7 @@ PURE = (
     "staging.py",
     "uuid_generator.py",
     "codes.py",
+    "checks.py",
     "translation.py",
     "tenancy.py",
     "providers/__init__.py",

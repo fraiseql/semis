@@ -29,6 +29,7 @@ from fraiseql_semis.errors import (
 )
 from fraiseql_semis.faker_provider import LOCALES, CustomProviderRegistry, Library, Provider
 from fraiseql_semis.generator import (
+    SOFT_DELETE,
     Copied,
     FakeDataGenerator,
     Fill,
@@ -41,6 +42,7 @@ from fraiseql_semis.pin import PinnedRead, SchemaPin, describe_changes, merge_re
 from fraiseql_semis.resolution import EXISTING_BY
 from fraiseql_semis.rows import declared_length
 from fraiseql_semis.schema import (
+    ColumnFacts,
     ColumnReference,
     Connection,
     LiveSchema,
@@ -1468,18 +1470,36 @@ def _left_null_notices(generator: FakeDataGenerator, scenario: Scenario) -> Iter
         )
         if not columns:
             continue
-        keys = {
-            column.name
-            for column in generator.facts.facts_for(spec.name).columns
-            if column.foreign_key is not None
-        }
-        if not keys.intersection(columns):
+        facts = {column.name: column for column in generator.facts.facts_for(spec.name).columns}
+        keys = {name for name in columns if facts[name].foreign_key is not None}
+        values = [name for name in columns if name not in keys]
+        if spec.fill == "all":
+            pointer = f"a parent under {parents}" if keys else None
+            hint = "; ".join(_fill_all_hints(values, facts, keys=pointer))
+        elif not keys:
             hint = "fill: draws them"
-        elif keys.issuperset(columns):
+        elif not values:
             hint = f"a parent under {parents} points them"
         else:
             hint = f"fill: draws the values, a parent under {parents} points the keys"
         yield f"{spec.name} leaves {', '.join(columns)} NULL; {hint}"
+
+
+def _fill_all_hints(
+    values: list[str], facts: Mapping[str, ColumnFacts], *, keys: str | None
+) -> Iterator[str]:
+    """Why ``fill: all`` leaves the value columns *values* ``NULL``, and what writes
+    them: the soft-delete columns first, then those semis draws no value for; then, with
+    *keys*, what points the keys it leaves."""
+    soft = [name for name in values if name in SOFT_DELETE]
+    if soft:
+        yield f"fill: all leaves soft-delete columns NULL: fill: [{soft[0]}] writes one"
+    undrawn = [facts[name].type_key for name in values if name not in SOFT_DELETE]
+    if undrawn:
+        types = ", ".join(dict.fromkeys(str(type_key) for type_key in undrawn))
+        yield f"semis draws no {types}: an override or a provider writes them"
+    if keys is not None:
+        yield f"{keys} points the keys"
 
 
 def _override_notice(scenario: Scenario, name: str, value: object) -> str:

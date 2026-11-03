@@ -59,8 +59,10 @@ def _generator_for(ddl: str, table: str) -> FakeDataGenerator:
 
 def test_generate_rows_refuses_an_incompletable_row() -> None:
     ddl = "CREATE TABLE catalog.tb_host (id UUID NOT NULL, address INET NOT NULL);"
+    generator = _generator_for(ddl, "catalog.tb_host")
+    rows = generator.generate_rows("catalog.tb_host", count=1, overrides={"address": None})
     with pytest.raises(RowContractError, match=r"catalog\.tb_host\.address is NOT NULL"):
-        list(_generator_for(ddl, "catalog.tb_host").generate_rows("catalog.tb_host", count=1))
+        list(rows)
 
 
 PRODUCTS = list(
@@ -158,9 +160,10 @@ def test_a_provider_by_name_draws_a_nullable_column() -> None:
     assert {row["created_by"] for row in _customers(registry)} == {"me"}
 
 
-def test_fill_all_draws_every_column_as_0_1_0_did() -> None:
-    """0.1.0 drew a nullable column as it draws a NOT NULL one, from the same stream."""
-    every = SHOP.replace("timestamptz,", "timestamptz NOT NULL,").replace(
+def test_fill_all_draws_every_column_as_a_not_null_one_but_the_soft_delete_ones() -> None:
+    """A nullable column is drawn as a NOT NULL one is, from the same stream; a
+    soft-delete column is left NULL (fraiseql/semis#12)."""
+    every = SHOP.replace(
         "uuid, country_code char(2))", "uuid NOT NULL, country_code char(2) NOT NULL)"
     )
     facts = SchemaFacts.from_source(every, table_codes=TableCodes({CUSTOMER: 0x0B}))

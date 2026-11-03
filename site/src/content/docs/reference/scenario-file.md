@@ -125,11 +125,25 @@ parent table under `tables:`, or in read-back `existing:`, a key:
 shop.tb_customer leaves fk_segment, deleted_at NULL; fill: draws the values, a parent under tables: or existing: points the keys
 ```
 
-`fill: all` draws every nullable column of the table, as 0.1.0 did. A `fill:` entry that
+`fill: all` draws every nullable column of the table, but two kinds, which it leaves
+`NULL` and names. The soft-delete columns, `deleted_at` and `deleted_by`, so no row it
+writes arrives deleted; a `fill:` list, an override or a provider writes them:
+
+```text
+shop.tb_customer leaves deleted_at NULL; fill: all leaves soft-delete columns NULL: fill: [deleted_at] writes one
+```
+
+And a column of a type semis does not draw, which an override or a provider writes:
+
+```text
+shop.tb_customer leaves last_ip NULL; semis draws no inet: an override or a provider writes them
+```
+
+A `fill:` entry that
 names no nullable column semis would write `NULL` is refused, naming the table, the
 column and why: unknown or not writable, NOT NULL, a foreign key, a column with a
 default, the natural id or the slug, a column trusted to a trigger, or the hierarchy's
-`path`, which read-back fills from the keys.
+`path`, which read-back fills from the keys. So is one of a type semis does not draw.
 
 ## Copied columns
 

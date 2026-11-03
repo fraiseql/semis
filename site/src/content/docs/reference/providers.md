@@ -57,7 +57,8 @@ from the SIREN.
 ## Where a library's rules come in
 
 A column a scenario overrides, or names a provider for, is drawn as the scenario says. An
-enum column draws one of its labels. Then the enabled libraries' rules apply, in the order
+enum column draws one of its labels, and a column under a CHECK listing values draws
+them, round-robin. Then the enabled libraries' rules apply, in the order
 `semis.yaml` lists the libraries, and only then semis' built-in providers. See
 [Writing scenarios](/guides/scenarios/#providers).
 

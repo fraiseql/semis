@@ -6,6 +6,39 @@ All notable changes to fraiseql-semis are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-03
+
+A scenario names fewer columns: what the schema already says — a CHECK's list of values,
+a json or array type, a soft-delete column — is read from it.
+
+### Added
+
+- **json, jsonb and array columns are drawn** (fraiseql/semis#10): a json column as a small
+  object of words, an array as one to three values of its element type, each chosen as a
+  column of that type and name would be (`emails TEXT[]` holds emails, `VARCHAR(4)[]`
+  values fit). A NOT NULL `jsonb` needs no override, and `fill: all` fills them.
+- **A CHECK listing values is drawn from** (fraiseql/semis#11): `role TEXT CHECK (role IN
+  ('manager', 'sales'))` receives `manager`, `sales`, `manager`, … round-robin, read from
+  DDL or a live database, where PostgreSQL stores it as `= ANY (ARRAY[…])`. A registered
+  provider and an override still win; any other CHECK is not read. No confiture floor
+  change: 1.32 reports the checks.
+
+### Changed
+
+- **`fill: all` leaves `deleted_at` and `deleted_by` NULL** (fraiseql/semis#12), so no row
+  it writes arrives soft-deleted, and the run says so:
+  `shop.tb_customer leaves deleted_at NULL; fill: all leaves soft-delete columns NULL: fill: [deleted_at] writes one`.
+  A `fill:` list, an override or a provider writes them.
+- **A column of a type semis does not draw is refused before a row is drawn**, naming the
+  column and its type (`app.tb_host.address is inet, a type semis does not draw`), where it
+  was drawn `None` and refused at the NOT NULL check, or silently written `NULL` when
+  `fill:` named it. `fill: all` leaves such a column `NULL` and names it.
+- Values move for a scenario whose tables have a column these change: a json, array or
+  CHECK-listed column is drawn where it was `NULL` or a Faker word, and a soft-delete column
+  is `NULL` under `fill: all`. Each draws from the run's one seeded stream, so the columns
+  after it in those tables draw other values than 0.6.0's, as the same seed always will
+  from now on. A scenario touching none of them writes 0.6.0's bytes. A pin does not move.
+
 ## [0.6.0] - 2026-11-03
 
 A scenario writes rows for several tenants from one file, each foreign key inside its
@@ -424,7 +457,8 @@ The first release.
   prints, and requires fraiseql-confiture 1.27, whose `CONFIG_003` refusal of a
   `--database-url` no longer repeats the password either.
 
-[Unreleased]: https://github.com/fraiseql/semis/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/fraiseql/semis/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/fraiseql/semis/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/fraiseql/semis/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/fraiseql/semis/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/fraiseql/semis/compare/v0.4.0...v0.5.0

@@ -135,13 +135,14 @@ def test_ci_holds_the_threshold_where_the_whole_suite_runs() -> None:
 
 FLOORS = {
     "faker": "faker>=24.0.0",
-    "psycopg": "psycopg[binary]>=3.2.10",
+    "psycopg": "psycopg[binary]>=3.3.0",
     "pyyaml": "pyyaml>=6.0.1",
     "typer": "typer>=0.19",
 }
-"""The lowest release of each that installs on Python 3.14 and passes the unit and contract
-suites under ``uv run --resolution lowest-direct``: typer 0.12-0.18 fail on import, and
-psycopg's and PyYAML's older releases have no cp314 wheel."""
+"""The lowest release of each that installs on Python 3.14 and passes the whole suite under
+``uv run --resolution lowest-direct``: typer 0.12-0.18 fail on import, PyYAML's older
+releases have no cp314 wheel, and psycopg executes confiture's template strings from 3.3.0
+on (D53)."""
 
 
 def test_every_runtime_floor_is_one_semis_runs_on() -> None:
@@ -153,6 +154,15 @@ def test_every_runtime_floor_is_one_semis_runs_on() -> None:
 def test_ci_tests_the_floors() -> None:
     lowest = "uv run --resolution lowest-direct --isolated --all-extras pytest -m 'not integration' --no-cov --ignore=tests/performance"
     assert lowest in _runs("checks")
+
+
+def test_ci_tests_the_floors_against_postgresql() -> None:
+    """The unit suite never reaches confiture's executor: a floor that cannot apply a seed
+    passes it (D53)."""
+    lowest = (
+        "uv run --resolution lowest-direct --isolated --all-extras pytest -m integration --no-cov"
+    )
+    assert lowest in _runs("integration")
 
 
 WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.yml"))

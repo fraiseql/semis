@@ -6,6 +6,16 @@ All notable changes to fraiseql-semis are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-04
+
+### Fixed
+
+- **psycopg 3.3.0 or later is required.** confiture executes its SQL as template strings,
+  which psycopg 3.2 refuses with `TypeError: expected bytes, string.templatelib.Template
+  found`: an install resolving psycopg 3.2 could not apply a seed. CI now runs the
+  integration suite on the lowest release of every dependency, so a floor that cannot
+  apply a seed fails there.
+
 ## [0.7.0] - 2026-11-03
 
 A scenario names fewer columns: what the schema already says — a CHECK's list of values,
@@ -457,7 +467,8 @@ The first release.
   prints, and requires fraiseql-confiture 1.27, whose `CONFIG_003` refusal of a
   `--database-url` no longer repeats the password either.
 
-[Unreleased]: https://github.com/fraiseql/semis/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/fraiseql/semis/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/fraiseql/semis/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/fraiseql/semis/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/fraiseql/semis/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/fraiseql/semis/compare/v0.5.0...v0.5.1

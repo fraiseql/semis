@@ -84,3 +84,6 @@ jobs:
       - run: uv sync --all-extras --locked
       # The whole suite, so the coverage threshold holds over every test.
       - run: uv run pytest
+      # The integration tests on the lowest release of every direct dependency: only they
+      # reach confiture's executor, so only they prove a floor can apply a seed.
+      - run: uv run --resolution lowest-direct --isolated --all-extras pytest -m integration --no-cov

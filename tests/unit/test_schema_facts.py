@@ -75,3 +75,19 @@ def test_a_table_without_a_code_is_refused() -> None:
 def test_from_env_outside_a_project_propagates_confitures_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigurationError):
         SchemaFacts.from_env("development", project_dir=tmp_path, table_codes=TableCodes(CODES))
+
+
+def test_a_table_the_ddl_leaves_unqualified_is_named_in_public() -> None:
+    """confiture's DDL reader displays it bare and a live database `public.`-qualified:
+    semis names it the same from both."""
+    ddl = """
+    CREATE TABLE tb_thing (
+        pk_thing INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        id UUID NOT NULL UNIQUE
+    );
+    """
+    facts = SchemaFacts.from_source(ddl, table_codes=TableCodes({"public.tb_thing": 0x0A000001}))
+    assert [facts.facts_for("public.tb_thing").table_code, facts.ref("tb_thing")] == [
+        0x0A000001,
+        None,
+    ]

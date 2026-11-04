@@ -10,7 +10,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
 from fraiseql_semis.errors import ScenarioError
-from fraiseql_semis.schema import ColumnFacts, ObjectRef, TableFacts
+from fraiseql_semis.schema import ColumnFacts, ObjectRef, TableFacts, qualified
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ class Staging:
         if twin is None:
             name = self.twin(table)
             raise ScenarioError(
-                f"{table.display} has no staging twin {name}: a prep-seed run writes there",
+                f"{qualified(table)} has no staging twin {name}: a prep-seed run writes there",
                 resolution_hint=(
                     f"Declare {name} in the schema, or run the scenario in read-back mode."
                 ),
@@ -71,7 +71,7 @@ class Staging:
             if missing:
                 raise ScenarioError(
                     f"{self.twin(table.ref)} has no {', '.join(missing)}, which "
-                    f"{table.ref.display}'s rows carry",
+                    f"{qualified(table.ref)}'s rows carry",
                     resolution_hint="Give the twin every column the catalog table is seeded with.",
                 )
             yield staged

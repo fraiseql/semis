@@ -57,10 +57,20 @@ __all__ = [
     "TableFacts",
     "TableKeys",
     "database_url",
+    "qualified",
 ]
 
 CONFITURE_VERSION = version("fraiseql-confiture")
 """The confiture that reads every schema here, recorded in a pin beside its digest."""
+
+
+def qualified(ref: ObjectRef) -> str:
+    """*ref*'s name as semis keys it: ``schema.name``, whichever source read it.
+
+    confiture's ``display`` drops ``public.`` from a table its DDL reader read, and keeps
+    it from a live database; semis names a table the same way from both."""
+    return f"{ref.schema}.{ref.name}"
+
 
 SourceKind = Literal["ddl", "live"]
 """How a schema was read: from DDL (``parse_schema``) or a live database (``introspect``).
@@ -104,7 +114,7 @@ class SchemaFacts:
         self._model = model
         self._codes = table_codes
         self._source_kind: SourceKind = source_kind
-        self._refs = {ref.display: ref for ref in model.tables}
+        self._refs = {qualified(ref): ref for ref in model.tables}
         # Each table's facts, read from the model once: a run asks for them many times.
         self._tables: dict[str, TableFacts] = {}
         self._columns: dict[str, tuple[ColumnFacts, ...]] = {}
@@ -220,7 +230,7 @@ class LiveSchema:
         (``tests/contract/test_introspect_names_every_referencing_key.py``)."""
         wanted: dict[tuple[str, str], ObjectRef] = {(t.schema, t.name): t for t in tables}
         references: list[Reference] = []
-        for ref, table in sorted(self.model.tables.items(), key=lambda item: item[0].display):
+        for ref, table in sorted(self.model.tables.items(), key=lambda item: qualified(item[0])):
             for constraint in table.constraints:
                 target = constraint.ref_table
                 into = None if target is None else wanted.get((target.schema or "", target.name))
@@ -236,7 +246,11 @@ class LiveSchema:
     def identities(self, table: ObjectRef) -> tuple[str, ...]:
         """*table*'s identity columns, whose sequences a reset restarts once it is empty."""
         found = next(
-            (found for ref, found in self.model.tables.items() if ref.display == table.display),
+            (
+                found
+                for ref, found in self.model.tables.items()
+                if qualified(ref) == qualified(table)
+            ),
             None,
         )
         columns = found.columns if found is not None else ()

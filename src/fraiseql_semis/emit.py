@@ -18,7 +18,7 @@ from fraiseql_semis.resolution import (
     ReadBackResolver,
     natural_ids,
 )
-from fraiseql_semis.schema import Connection, SeedFile, TableFacts
+from fraiseql_semis.schema import Connection, SeedFile, TableFacts, qualified
 from fraiseql_semis.staging import Staging
 from fraiseql_semis.tenancy import TenancyRule, Tenants
 from fraiseql_semis.translation import locale_keys, locale_reads
@@ -64,7 +64,7 @@ def prep_seed(  # noqa: PLR0913 — three positionals; how the run is written by
     walk = generator.walk(
         tables, resolver=resolver, existing=frozenset(existing or {}), tenancy=tenancy
     )
-    by_table = groupby(walk, key=lambda batch: batch[0].ref.display)
+    by_table = groupby(walk, key=lambda batch: qualified(batch[0].ref))
     for number, (display, batches) in enumerate(by_table, start=1):
         rows = (row for facts, level in batches for row in _remembered(resolver, facts, level))
         table = generator.facts.facts_for(display)
@@ -141,7 +141,7 @@ def read_back(  # noqa: PLR0913 — four positionals; how the run is written by 
     for number, (table, stream) in enumerate(walk, start=1):
         # Held, one table or level at a time: applied, then its keys read back by its ids.
         rows = list(stream)
-        display = table.ref.display
+        display = qualified(table.ref)
         level = None
         if display in hierarchies:
             level = levels[display] = levels.get(display, 0) + 1
@@ -194,7 +194,7 @@ def _write(  # noqa: PLR0913 — three positionals; where, how and in which form
     """*table*'s rows, written to the seed file *name* in *out_dir*."""
     return seeds.write(
         out_dir / name,
-        table.ref.display,
+        qualified(table.ref),
         rows,
         facts=generator.facts,
         mode=mode,

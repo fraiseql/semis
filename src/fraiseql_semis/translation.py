@@ -16,7 +16,7 @@ from typing import NamedTuple
 
 from fraiseql_semis.errors import ScenarioError
 from fraiseql_semis.faker_provider import LOCALES
-from fraiseql_semis.schema import SchemaFacts
+from fraiseql_semis.schema import SchemaFacts, qualified
 
 MAX_LOCALES = 254
 """How many locales a scenario writes: a translation row's sequence slot is 1 to 254,
@@ -156,7 +156,7 @@ class TranslationTable:
                 "at a locale row",
                 resolution_hint="translations: writes a table whose locale key is a declared foreign key.",
             )
-        locale_table = reference.table.display
+        locale_table = qualified(reference.table)
         if rule.locale_table is not None and rule.locale_table[0] != locale_table:
             raise ScenarioError(
                 f"{table}.{rule.locale_fk} points at {locale_table}, not semis.yaml's "
@@ -169,7 +169,7 @@ class TranslationTable:
         keys = sorted(
             name
             for name, column in columns.items()
-            if column.foreign_key is not None and column.foreign_key.table.display == entity
+            if column.foreign_key is not None and qualified(column.foreign_key.table) == entity
         )
         if not keys:
             raise ScenarioError(

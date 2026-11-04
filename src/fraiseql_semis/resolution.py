@@ -9,7 +9,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import Protocol, override
 
 from fraiseql_semis.errors import ResolutionError
-from fraiseql_semis.schema import ColumnFacts, ObjectRef, TableFacts, TableKeys
+from fraiseql_semis.schema import ColumnFacts, ObjectRef, TableFacts, TableKeys, qualified
 
 EXISTING_BY = "identifier"
 """The column a scenario names existing rows by: the slug, the trinity's readable key."""
@@ -56,14 +56,14 @@ class _RoundRobin:
 
     def _offer(self, table: TableFacts | TableKeys, values: list[object]) -> None:
         """*values* for *table*'s next rows: a hierarchy offers its rows level by level."""
-        _, known = self._parents.setdefault(table.ref.display, (table, []))
+        _, known = self._parents.setdefault(qualified(table.ref), (table, []))
         known.extend(values)
 
     def existing(self, table: TableKeys, values: Sequence[object]) -> None:
         """*values* for the rows *table* already holds, as parents later rows may point
         at — their ``pk_*`` in read-back, their UUIDs in prep-seed — offered as a run's
         own rows are, so children spread over them the same way."""
-        self._read.add(table.ref.display)
+        self._read.add(qualified(table.ref))
         self._offer(table, list(values))
 
     def value_for(self, column: ColumnFacts, *, table: str) -> object:
@@ -96,7 +96,7 @@ class _RoundRobin:
         if row >= len(values):
             raise ResolutionError(
                 f"{table}.{column.name} points at row {row + 1} of "
-                f"{_parent_of(column, table).display}, which is not remembered yet",
+                f"{qualified(_parent_of(column, table))}, which is not remembered yet",
                 resolution_hint="Remember each level of a hierarchy before the walk draws the next.",
             )
         self._last[table, column.name] = row
@@ -105,12 +105,12 @@ class _RoundRobin:
     def _values(self, column: ColumnFacts, table: str) -> list[object]:
         """What *column* may point at: its parent's rows so far, refused when there are none."""
         parent = _parent_of(column, table)
-        if parent.display not in self._parents:
+        if qualified(parent) not in self._parents:
             raise _no_rows(column, table, parent)
-        parent_facts, values = self._parents[parent.display]
-        if parent_facts.natural_id is None and parent.display not in self._read:
+        parent_facts, values = self._parents[qualified(parent)]
+        if parent_facts.natural_id is None and qualified(parent) not in self._read:
             raise ResolutionError(
-                f"{table}.{column.name} references {parent.display}, which shows no natural "
+                f"{table}.{column.name} references {qualified(parent)}, which shows no natural "
                 "id, so semis cannot tell its rows apart",
                 resolution_hint="Give the parent a UUID id column, as the trinity pattern does.",
             )
@@ -158,7 +158,7 @@ class ReadBackResolver(_RoundRobin):
         found = [keys[uuid] for uuid in ids if uuid in keys]
         if len(found) < len(ids):
             raise ResolutionError(
-                f"{table.ref.display}: {len(ids)} rows were written and {len(found)} "
+                f"{qualified(table.ref)}: {len(ids)} rows were written and {len(found)} "
                 "were read back",
                 resolution_hint=(
                     "Something in this transaction removed or re-identified them — a "
@@ -172,7 +172,7 @@ class ReadBackResolver(_RoundRobin):
         reference = column.foreign_key
         if reference is not None and reference.column != parent.surrogate_pk:
             raise ResolutionError(
-                f"{table}.{column.name} references {parent.ref.display}.{reference.column}, "
+                f"{table}.{column.name} references {qualified(parent.ref)}.{reference.column}, "
                 "and read-back learns only a parent's surrogate key "
                 f"({parent.surrogate_pk or 'none found'})",
                 resolution_hint="Use prep-seed mode, or point the foreign key at the pk_* column.",
@@ -189,7 +189,7 @@ def require_parents(
     """
     for column in _without_parent(table, counts, existing):
         if column.not_null:
-            raise _no_rows(column, table.ref.display, _parent_of(column, table.ref.display))
+            raise _no_rows(column, qualified(table.ref), _parent_of(column, qualified(table.ref)))
 
 
 def unparented(
@@ -218,8 +218,8 @@ def _without_parent(
         if (
             parent is not None
             and parent != table.ref
-            and parent.display not in existing
-            and counts.get(parent.display, 0) < 1
+            and qualified(parent) not in existing
+            and counts.get(qualified(parent), 0) < 1
         ):
             yield column
 
@@ -232,9 +232,9 @@ def _parent_of(column: ColumnFacts, table: str) -> ObjectRef:
 
 def _no_rows(column: ColumnFacts, table: str, parent: ObjectRef) -> ResolutionError:
     return ResolutionError(
-        f"{table}.{column.name} references {parent.display}, which has no rows in this run",
+        f"{table}.{column.name} references {qualified(parent)}, which has no rows in this run",
         resolution_hint=(
-            f"Generate {parent.display} in the same run, with a count of at least one; or, "
+            f"Generate {qualified(parent)} in the same run, with a count of at least one; or, "
             "in read-back, list it under existing: to point at the rows it already holds."
         ),
     )

@@ -13,7 +13,7 @@ from fraiseql_semis.faker_provider import CustomProviderRegistry, FakerProvider
 from fraiseql_semis.hierarchy import Hierarchy
 from fraiseql_semis.resolution import Resolver, require_parents, unparented
 from fraiseql_semis.rows import canonical, declared_length, require_row
-from fraiseql_semis.schema import ColumnFacts, ColumnReference, SchemaFacts, TableFacts
+from fraiseql_semis.schema import ColumnFacts, ColumnReference, SchemaFacts, TableFacts, qualified
 from fraiseql_semis.tenancy import Spread, TenancyRule, Tenants, spread
 from fraiseql_semis.translation import (
     PSEUDO_SLOT,
@@ -205,7 +205,7 @@ class FakeDataGenerator:
         }
         existing = existing | {written.table.locale_table for written in translations.values()}
         self._sequences = {entity: [] for entity in translations}
-        order = [ref.display for ref in self._facts.insert_order(counts)]
+        order = [qualified(ref) for ref in self._facts.insert_order(counts)]
         resolved: dict[str, dict[str, _Copy]] = {}
         for table in order:
             if table in translated:
@@ -325,7 +325,7 @@ class FakeDataGenerator:
         """What draws each column of *table* a row takes from a provider: every column
         but the *given*, *omitted*, *left_null* and *copied* ones, a default's, and those
         semis writes itself. A column semis cannot draw is refused here."""
-        display = table.ref.display
+        display = qualified(table.ref)
         return {
             column.name: provider.drawer(column, table=display)
             for column in table.columns
@@ -413,7 +413,7 @@ class FakeDataGenerator:
         """*translation*'s rows: for each row of its entity, in order, one per locale, in
         ``locales:`` order. Each draws from its locale's provider, reseeded for this
         table, and takes the sequence its entity row's and its slot give."""
-        written, display = translation.table, table_facts.ref.display
+        written, display = translation.table, qualified(table_facts.ref)
         columns = {column.name: column for column in table_facts.columns}
         left_null = self._left_null(
             table_facts,
@@ -461,7 +461,7 @@ class FakeDataGenerator:
     ) -> Iterator[Row]:
         """Every row is drawn, and a row *coverage* leaves out is then not yielded, so the
         rows written keep the labels and UUIDs they have at full coverage."""
-        display = table_facts.ref.display
+        display = qualified(table_facts.ref)
         seen = self._seen.setdefault(display, {})
         look_up = _resolver(resolver, entity_key, display)
         sources: dict[object, object] = {}
@@ -537,7 +537,7 @@ class FakeDataGenerator:
 
         A pseudo label has no randomness to draw again: one that another label of the
         table already is, under a unique key, is refused, naming both."""
-        display = table_facts.ref.display
+        display = qualified(table_facts.ref)
         encoded = self._uuids.generate(table_facts.table_code, sequence=sequence)
         fields = SemanticUUIDGenerator.decode(encoded)
         row: Row = {**default, written.locale_key: locale_key}
@@ -732,7 +732,7 @@ class FakeDataGenerator:
         column in *omitted* is left out of the row. A key with no parent in the run is never drawn, whatever *fill* says.
         """
         keys = unparented - overrides.keys() - omitted
-        display = table.ref.display
+        display = qualified(table.ref)
         return keys | frozenset(
             column.name
             for column in table.columns
@@ -800,7 +800,7 @@ class FakeDataGenerator:
             )
             if origin is None or unknown is not None:
                 raise ScenarioError(
-                    f"{table}.{name} copies {parent.ref.display}.{source}, which {unknown}",
+                    f"{table}.{name} copies {qualified(parent.ref)}.{source}, which {unknown}",
                     resolution_hint=(
                         "Copy a column whose value semis knows: the parent's natural id or "
                         "slug, or a column it draws or overrides."
@@ -808,7 +808,7 @@ class FakeDataGenerator:
                 )
             if column.type_key != origin.type_key:
                 raise ScenarioError(
-                    f"{table}.{name} is {column.type_key}, and {parent.ref.display}.{source} "
+                    f"{table}.{name} is {column.type_key}, and {qualified(parent.ref)}.{source} "
                     f"is {origin.type_key}: a copy is not cast",
                     resolution_hint="Copy a column of the same type.",
                 )
@@ -820,7 +820,7 @@ class FakeDataGenerator:
                         f"Give {key} a parent with rows in the run, or copy into a nullable column."
                     ),
                 )
-            resolved[name] = _Copy(columns[key], parent.ref.display, source)
+            resolved[name] = _Copy(columns[key], qualified(parent.ref), source)
         return resolved
 
     def _followed(
@@ -835,9 +835,9 @@ class FakeDataGenerator:
         draws the key; otherwise why a copy cannot follow it."""
         column = next((c for c in table.columns if c.name == key), None)
         reference = column.foreign_key if column is not None else None
-        parent = reference.table.display if reference is not None else ""
+        parent = qualified(reference.table) if reference is not None else ""
         if column is None or reference is None:
-            reason = f"{key} is not a foreign key of {table.ref.display}"
+            reason = f"{key} is not a foreign key of {qualified(table.ref)}"
         elif key in trusted:
             reason = f"{key} is trusted to a trigger"
         elif column.default is not None:
@@ -863,7 +863,7 @@ class FakeDataGenerator:
         """Why the run does not know the value of *parent*'s column *name* when its row is
         drawn; ``None`` when it does: the natural id, the slug, an override, a copy, or a
         column semis draws. *parentless* are *parent*'s keys with no parent in the run."""
-        plan = tables.get(parent.ref.display, _NOT_PLANNED)
+        plan = tables.get(qualified(parent.ref), _NOT_PLANNED)
         reason = _left_out(name, column, trusted=plan.trusted, hierarchy=plan.hierarchy)
         if (
             reason is not None
@@ -915,7 +915,7 @@ class FakeDataGenerator:
                 reason = self._fillable(column, table)
             if reason is not None:
                 raise ScenarioError(
-                    f"{table.ref.display} fills {name}, which {reason}",
+                    f"{qualified(table.ref)} fills {name}, which {reason}",
                     resolution_hint=(
                         "Under fill:, name a nullable column semis would otherwise write NULL."
                     ),
@@ -934,8 +934,8 @@ class FakeDataGenerator:
         resolver: Resolver | None,
         drawers: Mapping[str, Callable[[], object]],
     ) -> Iterator[Row]:
-        seen = self._seen.setdefault(table_facts.ref.display, {})
-        kept = self._kept.get(table_facts.ref.display, {})
+        seen = self._seen.setdefault(qualified(table_facts.ref), {})
+        kept = self._kept.get(qualified(table_facts.ref), {})
         for index in indexes:
             given = {column: _overridden(value, index) for column, value in overrides.items()}
             points_at = None
@@ -950,10 +950,10 @@ class FakeDataGenerator:
                 copied=frozenset(copies),
                 resolver=resolver,
                 drawers=drawers,
-                tenant=self._tenant(table_facts.ref.display, index),
+                tenant=self._tenant(qualified(table_facts.ref), index),
             )
             for name, copy in copies.items():
-                row[name] = self._copied(table_facts.ref.display, row, copy, resolver)
+                row[name] = self._copied(qualified(table_facts.ref), row, copy, resolver)
             self._accepted(table_facts, row, trusted=omitted, seen=seen)
             for name, values in kept.items():
                 values.append(row.get(name))
@@ -1003,8 +1003,8 @@ class FakeDataGenerator:
         points its keys within it at a parent of that tenant."""
         encoded = self._uuids.generate(table.table_code, sequence=sequence)
         fields = SemanticUUIDGenerator.decode(encoded)
-        if table.ref.display in self._sequences:
-            self._sequences[table.ref.display].append(fields.sequence)
+        if qualified(table.ref) in self._sequences:
+            self._sequences[qualified(table.ref)].append(fields.sequence)
         word = words or self._values.word
         row: Row = {}
         for column in table.columns:
@@ -1022,14 +1022,14 @@ class FakeDataGenerator:
                 row[column.name] = None
             elif _refers_to_itself(column, table):
                 row[column.name] = (
-                    _resolver(resolver, column, table.ref.display).value_at(
-                        column, table=table.ref.display, row=points_at[1]
+                    _resolver(resolver, column, qualified(table.ref)).value_at(
+                        column, table=qualified(table.ref), row=points_at[1]
                     )
                     if points_at is not None and points_at[0] == column.name
                     else None
                 )
             elif column.foreign_key is not None:
-                row[column.name] = self._key(resolver, column, table.ref.display, tenant)
+                row[column.name] = self._key(resolver, column, qualified(table.ref), tenant)
             else:
                 row[column.name] = drawers[column.name]()
         return row
@@ -1043,7 +1043,7 @@ class FakeDataGenerator:
         found = self._spread
         if tenant is None or found is None or column.name not in found.keys.get(table, ()):
             return asked.value_for(column, table=table)
-        parent = cast("ColumnReference", column.foreign_key).table.display
+        parent = qualified(cast("ColumnReference", column.foreign_key).table)
         rows = found.rows_in(parent, tenant)
         turn = self._turns.get((table, column.name, tenant), 0)
         self._turns[table, column.name, tenant] = turn + 1
@@ -1084,7 +1084,7 @@ def _null() -> None:
 
 
 def _check_overrides(table: TableFacts, overrides: Mapping[str, Override], count: int) -> None:
-    display = table.ref.display
+    display = qualified(table.ref)
     check_override_lengths(display, overrides, count)
     columns = {column.name: column for column in table.columns}
     for name in overrides:
@@ -1113,7 +1113,7 @@ def _check_left_null(column: ColumnFacts, table: TableFacts) -> None:
     """A nullable foreign key may be overridden ``null``: written so, with no parent."""
     if column.not_null:
         raise ScenarioError(
-            f"{table.ref.display}.{column.name} is NOT NULL, so it cannot be left null",
+            f"{qualified(table.ref)}.{column.name} is NOT NULL, so it cannot be left null",
             resolution_hint="Generate its parent in the run, and drop the override.",
         )
 
@@ -1122,14 +1122,16 @@ def _check_trusted(table: TableFacts, trusted: frozenset[str]) -> None:
     unknown = sorted(trusted - {column.name for column in table.columns})
     if unknown:
         raise ScenarioError(
-            f"{table.ref.display} trusts {', '.join(unknown)} to a trigger, which is not a "
+            f"{qualified(table.ref)} trusts {', '.join(unknown)} to a trigger, which is not a "
             "column semis writes",
             resolution_hint="Name, under trusts_trigger, a writable column a trigger fills.",
         )
 
 
 def _refers_to_itself(column: ColumnFacts, table: TableFacts) -> bool:
-    return column.foreign_key is not None and column.foreign_key.table.display == table.ref.display
+    return column.foreign_key is not None and qualified(column.foreign_key.table) == qualified(
+        table.ref
+    )
 
 
 def _drawn_self_fks(
@@ -1179,7 +1181,7 @@ def _check_hierarchy(
     ``NULL``, so it must be nullable too. A tree of *count* rows with more than its
     roots needs a fan-out. A path column is semis' alone to set.
     """
-    display = table.ref.display
+    display = qualified(table.ref)
     if hierarchy is None:
         drawn = _drawn_self_fks(table, overrides, trusted)
         if drawn:
@@ -1242,7 +1244,7 @@ def _check_path(
     else:
         return
     raise ScenarioError(
-        f"{table.ref.display}.{path} {reason}",
+        f"{qualified(table.ref)}.{path} {reason}",
         resolution_hint="Name, as path:, a nullable ltree column the scenario leaves to semis.",
     )
 

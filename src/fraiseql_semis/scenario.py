@@ -50,6 +50,7 @@ from fraiseql_semis.schema import (
     SchemaFacts,
     SeedFile,
     TableFacts,
+    qualified,
 )
 from fraiseql_semis.seeds import Mode
 from fraiseql_semis.staging import Staging
@@ -918,7 +919,7 @@ class ScenarioManager:
             )
         if found is not None:
             raise AlreadyAppliedError(
-                f"scenario {scenario.name} is already applied: {found.display} holds its rows",
+                f"scenario {scenario.name} is already applied: {qualified(found)} holds its rows",
                 resolution_hint=(
                     "A scenario applies once, to a reset database. Apply it with semis "
                     "apply --reset, or run semis reset first: either deletes the "
@@ -952,7 +953,7 @@ class ScenarioManager:
                 if identities and not kept:
                     readback.restart(connection, ref, identities)
                 restarted = not kept if identities else None
-                deleted.append(Deleted(ref.display, rows, kept, restarted))
+                deleted.append(Deleted(qualified(ref), rows, kept, restarted))
         return tuple(deleted)
 
     def _refuse_pointed_at(
@@ -970,23 +971,23 @@ class ScenarioManager:
         not write. Each referencing table is locked ``SHARE`` first, so no row starts
         pointing in before the delete.
         """
-        scopes = {ref.display: scope for ref, scope in scoped}
+        scopes = {qualified(ref): scope for ref, scope in scoped}
         references = live.references_into([ref for ref, _ in scoped])
-        referencing = {reference.table.display: reference.table for reference in references}
+        referencing = {qualified(reference.table): reference.table for reference in references}
         readback.lock_shared(connection, [referencing[name] for name in sorted(referencing)])
         for reference in references:
             rows = readback.pointing(
                 connection,
                 reference,
-                scope=scopes[reference.target.display],
-                own=scopes.get(reference.table.display),
+                scope=scopes[qualified(reference.target)],
+                own=scopes.get(qualified(reference.table)),
             )
             if rows:
                 raise ResetBlockedError(
                     f"scenario {scenario.name}: "
                     + ("1 row" if rows == 1 else f"{rows} rows")
-                    + f" of {reference.table.display} point{'s' if rows == 1 else ''} at its rows "
-                    f"of {reference.target.display}, by {reference.constraint}",
+                    + f" of {qualified(reference.table)} point{'s' if rows == 1 else ''} at its rows "
+                    f"of {qualified(reference.target)}, by {reference.constraint}",
                     resolution_hint=(
                         "semis deletes only the scenario's rows, and never through a "
                         "cascade: delete or repoint those rows first, or recreate the "
@@ -1002,7 +1003,7 @@ class ScenarioManager:
         scoped: list[tuple[ObjectRef, readback.Scope]] = []
         for ref, table in self._written(scenario):
             natural_id = self._asked_by(ref, table)
-            written = translated.get(table.ref.display)
+            written = translated.get(qualified(table.ref))
             if natural_id is not None:
                 bounds = scenario_bounds(table.table_code, scenario.id)
                 scoped.append((ref, readback.Scope(natural_id, bounds)))
@@ -1010,7 +1011,7 @@ class ScenarioManager:
                 scoped.append((ref, self._through(scenario, ref, table, written)))
             else:
                 raise ResetScopeError(
-                    f"scenario {scenario.name}: {ref.display} has no uuid id, so the "
+                    f"scenario {scenario.name}: {qualified(ref)} has no uuid id, so the "
                     "reset cannot tell the scenario's rows there from others",
                     resolution_hint=(
                         "Recreate the database, or delete that table's rows yourself; "
@@ -1320,7 +1321,7 @@ class ScenarioManager:
         twins' rows are promoted into the final tables."""
         written: list[tuple[ObjectRef, TableFacts]] = []
         for ref in self._facts.insert_order(self._written_tables(scenario)):
-            table = self._facts.facts_for(ref.display)
+            table = self._facts.facts_for(qualified(ref))
             written.append((table.ref, table))
             twin = self._facts.ref(self._staging.twin(table.ref))
             if scenario.mode == "prep-seed" and twin is not None:
@@ -1330,7 +1331,7 @@ class ScenarioManager:
     def _asked_by(self, ref: ObjectRef, table: TableFacts) -> str | None:
         """The column the check asks *ref*, *table* or its twin, by for the scenario's UUID
         range: its natural id, when that is a ``uuid``. ``None`` skips it."""
-        columns = self._facts.columns(ref.display) or ()
+        columns = self._facts.columns(qualified(ref)) or ()
         uuids = {column.name for column in columns if column.type_key == "uuid"}
         return table.natural_id if table.natural_id in uuids else None
 

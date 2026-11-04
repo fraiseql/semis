@@ -6,6 +6,15 @@ All notable changes to fraiseql-semis are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-11-04
+
+### Fixed
+
+- **A table the DDL leaves in `public` is seedable.** A schema read from DDL whose
+  `CREATE TABLE tb_x` names no schema could not be seeded: `public.tb_x` was "not in the
+  schema" and `tb_x` "not schema-qualified". A scenario, `table_codes:` and `tenancy:`
+  now name it `public.tb_x`, from DDL as from a live database.
+
 ## [0.7.1] - 2026-11-04
 
 ### Fixed
@@ -467,7 +476,8 @@ The first release.
   prints, and requires fraiseql-confiture 1.27, whose `CONFIG_003` refusal of a
   `--database-url` no longer repeats the password either.
 
-[Unreleased]: https://github.com/fraiseql/semis/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/fraiseql/semis/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/fraiseql/semis/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/fraiseql/semis/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/fraiseql/semis/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/fraiseql/semis/compare/v0.5.1...v0.6.0

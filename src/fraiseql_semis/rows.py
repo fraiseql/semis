@@ -10,7 +10,7 @@ from collections.abc import Container, Iterator, Mapping
 from dataclasses import dataclass
 
 from fraiseql_semis.errors import RowContractError
-from fraiseql_semis.schema import ColumnFacts, TableFacts
+from fraiseql_semis.schema import ColumnFacts, TableFacts, qualified
 
 # `type_key` spells a declared length the same from DDL and from a live database;
 # `raw_sql_type` says `bpchar(2)` for `CHAR(2)`.
@@ -63,7 +63,7 @@ def check_row(
         # A bare string would match by substring: `"id" in "identifier"`.
         raise TypeError("trusted is a set of column names, not one string")
     return [
-        Violation(table.ref.display, column.name, fact, found)
+        Violation(qualified(table.ref), column.name, fact, found)
         for column in table.columns
         for fact, found in _failures(
             column, row, column.name in trusted, (seen or {}).get(column.name, ())

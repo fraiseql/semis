@@ -16,7 +16,7 @@ from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 
 from fraiseql_semis.errors import ResolutionError, SchemaNotBuiltError, UnreachableDatabaseError
-from fraiseql_semis.schema import Connection, ObjectRef, Reference, TableFacts, TableKeys
+from fraiseql_semis.schema import Connection, ObjectRef, Reference, TableFacts, TableKeys, qualified
 
 SEMIS_LOCK_CLASS = 0x5E3115
 """semis' advisory-lock class: the first of the two ``int4`` keys of every lock it takes,
@@ -300,7 +300,7 @@ def existing_rows(
     """
     if table.surrogate_pk is None:
         raise ResolutionError(
-            f"existing {table.ref.display} shows no surrogate key to point at",
+            f"existing {qualified(table.ref)} shows no surrogate key to point at",
             resolution_hint="Read-back points a foreign key at a pk_* column.",
         )
     if values is not None and by is None:
@@ -321,7 +321,7 @@ def existing_rows(
     if values is None:
         if not rows:
             raise ResolutionError(
-                f"existing {table.ref.display} holds no rows to point at",
+                f"existing {qualified(table.ref)} holds no rows to point at",
                 resolution_hint="Apply the rows it holds first, or generate it in the run.",
             )
         return rows
@@ -353,12 +353,12 @@ def _in_order(
         matched = len(found.get(value, []))
         if matched == 0:
             raise ResolutionError(
-                f"existing {table.ref.display} has no row whose {by} is {value!r}",
+                f"existing {qualified(table.ref)} has no row whose {by} is {value!r}",
                 resolution_hint=f"Name, under where:, rows the table holds by their {by}.",
             )
         if matched > 1:
             raise ResolutionError(
-                f"existing {table.ref.display} has {matched} rows whose {by} is {value!r}",
+                f"existing {qualified(table.ref)} has {matched} rows whose {by} is {value!r}",
                 resolution_hint=(
                     f"Name, under where:, rows the table holds by their {by}, one row each: "
                     "which of two a child points at would be arbitrary."
@@ -375,7 +375,7 @@ def _built(table: ObjectRef) -> Iterator[None]:
         yield
     except psycopg.errors.UndefinedTable as error:
         raise SchemaNotBuiltError(
-            f"the database holds no {table.display}",
+            f"the database holds no {qualified(table)}",
             resolution_hint="Build the schema in this database, then apply the scenario.",
         ) from error
 
@@ -388,7 +388,7 @@ def learn(connection: Connection, table: TableFacts, uuids: Sequence[object]) ->
     """
     if table.surrogate_pk is None or table.natural_id is None:
         raise ResolutionError(
-            f"{table.ref.display} shows no surrogate key and natural id to read back",
+            f"{qualified(table.ref)} shows no surrogate key and natural id to read back",
             resolution_hint="Read-back needs a pk_* and a UUID id; use prep-seed mode otherwise.",
         )
     query = _LEARN.format(
@@ -410,7 +410,7 @@ def set_paths(
     """
     if table.natural_id is None:
         raise ResolutionError(
-            f"{table.ref.display} shows no natural id to set its paths by",
+            f"{qualified(table.ref)} shows no natural id to set its paths by",
             resolution_hint="Read-back needs a UUID id; use prep-seed mode otherwise.",
         )
     query = _SET_PATHS.format(

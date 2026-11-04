@@ -12,7 +12,7 @@ from uuid import UUID
 
 from fraiseql_semis.errors import ResolutionError, ScenarioError
 from fraiseql_semis.hierarchy import Hierarchy
-from fraiseql_semis.schema import ColumnFacts, SchemaFacts
+from fraiseql_semis.schema import ColumnFacts, SchemaFacts, qualified
 
 
 @dataclass(frozen=True)
@@ -182,7 +182,7 @@ def _within(  # noqa: PLR0913 — the table and its plan, then what is known of 
     within = set()
     crossable = set()
     for column in facts.facts_for(table).columns:
-        parent = column.foreign_key.table.display if column.foreign_key is not None else None
+        parent = qualified(column.foreign_key.table) if column.foreign_key is not None else None
         if parent is None or parent == table or not _drawn(column, plan):
             continue
         if parent in scoped:
@@ -239,12 +239,12 @@ def _value_column(
     reference = column.foreign_key
     if reference is None:
         return column.name
-    if reference.table.display != tenants.table:
+    if qualified(reference.table) != tenants.table:
         raise ScenarioError(
             f"{table}.{column.name} is the tenant column, and a foreign key to "
-            f"{reference.table.display}, which is not the run's tenant table",
+            f"{qualified(reference.table)}, which is not the run's tenant table",
             resolution_hint=(
-                f"Name {reference.table.display} as tenancy: table: in semis.yaml, and write "
+                f"Name {qualified(reference.table)} as tenancy: table: in semis.yaml, and write "
                 "it in the run or list its tenants under existing:."
             ),
         )
@@ -305,7 +305,7 @@ def _require_parents(
     """Refuse *table*'s *key* when its parent has rows in the run and none in a tenant
     *table* has rows in. A parent with no rows at all is the run's to leave ``NULL``."""
     column = next(c for c in facts.facts_for(table).columns if c.name == key)
-    parent = column.foreign_key.table.display if column.foreign_key is not None else ""
+    parent = qualified(column.foreign_key.table) if column.foreign_key is not None else ""
     held = set(rows[parent])
     if not held:
         return

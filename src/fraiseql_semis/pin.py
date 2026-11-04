@@ -17,7 +17,7 @@ from uuid import UUID
 
 from fraiseql_semis.errors import IncomparablePinError, PinError, ScenarioError
 from fraiseql_semis.resolution import EXISTING_BY
-from fraiseql_semis.schema import CONFITURE_VERSION, ColumnFacts, SchemaFacts, SourceKind
+from fraiseql_semis.schema import CONFITURE_VERSION, ColumnFacts, SchemaFacts, SourceKind, qualified
 
 
 @dataclass(frozen=True)
@@ -294,10 +294,10 @@ def projection(  # noqa: PLR0913 — what a pin reads, each per-table mapping ap
     existing = list(existing)
     projected: list[dict[str, object]] = []
     for ref in facts.insert_order(tables):
-        table = facts.facts_for(ref.display)
+        table = facts.facts_for(qualified(ref))
         projected.append(
             {
-                "table": ref.display,
+                "table": qualified(ref),
                 "surrogate_pk": table.surrogate_pk,
                 "natural_id": table.natural_id,
                 "columns": [_column(column) for column in table.columns],
@@ -338,7 +338,9 @@ def _column(column: ColumnFacts) -> dict[str, object]:
         "unique": column.unique,
         "checks": list(column.checks),
         "enum_values": None if column.enum_values is None else list(column.enum_values),
-        "foreign_key": None if reference is None else [reference.table.display, reference.column],
+        "foreign_key": None
+        if reference is None
+        else [qualified(reference.table), reference.column],
     }
 
 

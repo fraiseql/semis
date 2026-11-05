@@ -81,8 +81,9 @@ class TableSpec:
 
     *overrides* maps a column to a scalar, a list with one value per row, or a callable
     taking the row's 0-based index. *providers* maps a column to the name of a registered
-    provider. *fill* names the nullable columns drawn rather than written ``NULL``, or
-    is ``"all"``. *trusts_trigger* names the columns a trigger fills. *hierarchy* shapes
+    provider. *fill* names the nullable columns drawn rather than written ``NULL``, and
+    the columns with a default drawn rather than left to PostgreSQL; or is ``"all"``, every
+    nullable column but none with a default. *trusts_trigger* names the columns a trigger fills. *hierarchy* shapes
     a table whose foreign key points at itself. *copies* maps a column to where its value
     is copied from: a column of the row one of the table's foreign keys points at.
     *translations* names the table each row's translations are written to, one row per

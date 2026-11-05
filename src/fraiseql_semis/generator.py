@@ -310,6 +310,7 @@ class FakeDataGenerator:
                 copied=frozenset(plan.copies),
             ),
             copied=frozenset(plan.copies),
+            fill=plan.fill,
         )
 
     def _drawers(  # noqa: PLR0913 — whose drawers positionally; which columns by keyword
@@ -321,17 +322,19 @@ class FakeDataGenerator:
         omitted: frozenset[str],
         left_null: frozenset[str],
         copied: frozenset[str],
+        fill: Fill = frozenset(),
     ) -> dict[str, Callable[[], object]]:
         """What draws each column of *table* a row takes from a provider: every column
-        but the *given*, *omitted*, *left_null* and *copied* ones, a default's, and those
-        semis writes itself. A column semis cannot draw is refused here."""
+        but the *given*, *omitted*, *left_null* and *copied* ones, a default's unless
+        *fill* names it, and those semis writes itself. A column semis cannot draw is
+        refused here."""
         display = qualified(table.ref)
         return {
             column.name: provider.drawer(column, table=display)
             for column in table.columns
             if column.name not in given
             and column.name not in omitted | left_null | copied
-            and column.default is None
+            and (column.default is None or _named(fill, column.name))
             and self._semis_own(column, table) is None
         }
 
@@ -614,7 +617,8 @@ class FakeDataGenerator:
         refused. *overrides* gives a column the scenario's value in place of a
         provider's, default or not; the natural id and foreign keys cannot be
         overridden. A nullable column is written ``NULL`` unless it is overridden, has
-        a provider registered by name, or is named in *fill* (``"all"``: every one).
+        a provider registered by name, or is named in *fill* (``"all"``: every one). A
+        column with a default is left to PostgreSQL unless *fill* lists it.
         A foreign key's value comes from *resolver*, never from a provider;
         without one, a table with a foreign key is refused. A self-referencing table is
         drawn level by level, by ``walk``.
@@ -670,6 +674,7 @@ class FakeDataGenerator:
             omitted=omitted,
             left_null=left_null,
             copied=frozenset(copies),
+            fill=fill,
         )
         return self._draw(
             table_facts,
@@ -736,7 +741,7 @@ class FakeDataGenerator:
         return keys | frozenset(
             column.name
             for column in table.columns
-            if self._fillable(column, table) is None
+            if self._nullable_value(column, table)
             and column.name not in omitted
             and column.name not in overrides
             and column.name not in copied
@@ -748,17 +753,25 @@ class FakeDataGenerator:
             )
         )
 
+    def _nullable_value(self, column: ColumnFacts, table: TableFacts) -> bool:
+        """Whether *column* is one a run writes ``NULL`` unless the scenario names it: a
+        nullable value column with no default."""
+        return (
+            not column.not_null
+            and column.default is None
+            and self._semis_own(column, table) is None
+        )
+
     def _fillable(self, column: ColumnFacts, table: TableFacts) -> str | None:
-        """Why *column* is not one a scenario chooses to draw or leave ``NULL``; ``None``
-        when it is: a nullable value column. A key comes from the run's mode, a default
-        is PostgreSQL's, and the natural id and the slug are semis' own."""
+        """Why *column* is not one a scenario chooses to draw; ``None`` when it is: a
+        nullable value column, or one with a default, which ``fill:`` draws in place of
+        PostgreSQL. A key comes from the run's mode, the natural id and the slug are
+        semis' own, and a NOT NULL column with no default is always drawn."""
         own = self._semis_own(column, table)
         if own is not None:
             return own
-        if column.not_null:
-            return "is NOT NULL, so semis always draws it"
-        if column.default is not None:
-            return "has a default, which PostgreSQL applies"
+        if column.not_null and column.default is None:
+            return "is NOT NULL with no default, so semis always draws it"
         return None
 
     def _check_copies(
@@ -873,7 +886,7 @@ class FakeDataGenerator:
             or name in plan.copies
         ):
             return reason
-        if column.default is not None:
+        if column.default is not None and not _named(plan.fill, name):
             return "has a default, which PostgreSQL applies"
         left = self._left_null(
             parent,
@@ -904,7 +917,7 @@ class FakeDataGenerator:
         trusted: frozenset[str],
         hierarchy: Hierarchy | None,
     ) -> None:
-        """Refuse a *fill* entry that names no column a scenario may leave ``NULL``."""
+        """Refuse a *fill* entry that names no column a scenario chooses to draw."""
         if fill == "all":
             return
         columns = {column.name: column for column in table.columns}
@@ -917,7 +930,8 @@ class FakeDataGenerator:
                 raise ScenarioError(
                     f"{qualified(table.ref)} fills {name}, which {reason}",
                     resolution_hint=(
-                        "Under fill:, name a nullable column semis would otherwise write NULL."
+                        "Under fill:, name a column semis would otherwise write NULL or "
+                        "leave to its default."
                     ),
                 )
 
@@ -1016,7 +1030,9 @@ class FakeDataGenerator:
                 row[column.name] = None
             elif column.name == self._identifier_column:
                 row[column.name] = f"{word()}-{fields.scenario_id:x}-{fields.sequence:x}"
-            elif column.default is not None or column.name in trusted:
+            elif (column.default is not None and column.name not in drawers) or (
+                column.name in trusted
+            ):
                 continue
             elif column.name in left_null:
                 row[column.name] = None
@@ -1069,6 +1085,11 @@ def _left_out(
     if hierarchy is not None and name == hierarchy.path:
         return "is the hierarchy's path, which read-back fills from the keys"
     return None
+
+
+def _named(fill: Fill, column: str) -> bool:
+    """Whether the ``fill:`` list *fill* names *column*; ``all`` names no default."""
+    return fill != "all" and column in fill
 
 
 def _omitted(trusted: frozenset[str], hierarchy: Hierarchy | None) -> frozenset[str]:

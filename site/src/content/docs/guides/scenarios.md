@@ -121,6 +121,10 @@ deleted, and a column of a type semis does not draw. A `fill:` list or an overri
 writes a soft-delete column, for deleted rows on purpose. See
 [which columns are drawn](/reference/scenario-file/#which-columns-are-drawn).
 
+A column with a default — `status TEXT NOT NULL DEFAULT 'draft'` — is left to
+PostgreSQL unless `fill:` names it: then semis draws it, from its
+`CHECK (status IN (…))` list when it has one. `fill: all` never draws a default.
+
 ## Providers
 
 `providers:` names the provider that draws one column. A shipped or installed library's

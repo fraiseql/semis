@@ -183,9 +183,8 @@ REGIONS = SHOP.replace(
     [
         ("nowhere", "is not a column semis writes"),
         ("pk_customer", "is not a column semis writes"),
-        ("name", "is NOT NULL, so semis always draws it"),
+        ("name", "is NOT NULL with no default, so semis always draws it"),
         ("fk_region", "is a foreign key, whose value comes from the run's mode"),
-        ("note", "has a default, which PostgreSQL applies"),
         ("created_by", "is trusted to a trigger, which fills it"),
     ],
 )
@@ -198,6 +197,38 @@ def test_fill_naming_a_column_semis_would_not_leave_null_is_refused(
         generator.generate_rows(
             CUSTOMER, 3, fill=frozenset({column}), trusted=frozenset({"created_by"})
         )
+
+
+DEFAULTED = SHOP.replace(
+    "country_code char(2));",
+    "country_code char(2), note text DEFAULT 'none',"
+    " status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'placed', 'paid')));",
+)
+
+
+def _defaulted(fill: object) -> list[Row]:
+    facts = SchemaFacts.from_source(DEFAULTED, table_codes=TableCodes({CUSTOMER: 0x0B}))
+    generator = FakeDataGenerator(facts, scenario_id=0x5001, seed=42)
+    return list(generator.generate_rows(CUSTOMER, 12, fill=fill))  # ty: ignore[invalid-argument-type]
+
+
+def test_a_column_with_a_default_is_left_to_postgresql_unless_fill_names_it() -> None:
+    """fraiseql/semis#13: fill: all draws what would be NULL, never what has a default."""
+    for fill in (frozenset(), "all"):
+        assert not {"note", "status"} & {name for row in _defaulted(fill) for name in row}
+
+
+def test_fill_draws_a_not_null_column_with_a_default_from_its_check() -> None:
+    """fraiseql/semis#13: the status a scenario names is drawn, not left 'draft'."""
+    statuses = {row["status"] for row in _defaulted(frozenset({"status"}))}
+    assert statuses <= {"draft", "placed", "paid"}
+    assert len(statuses) > 1
+
+
+def test_fill_draws_a_nullable_column_with_a_default() -> None:
+    notes = [row["note"] for row in _defaulted(frozenset({"note"}))]
+    assert all(isinstance(note, str) for note in notes)
+    assert "none" not in notes
 
 
 OPTIONAL = SchemaFacts.from_source(

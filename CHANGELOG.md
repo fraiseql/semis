@@ -6,6 +6,17 @@ All notable changes to fraiseql-semis are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-11-05
+
+### Changed
+
+- **`fill:` draws a column with a default.** `fill: [status]` on
+  `status TEXT NOT NULL DEFAULT 'draft'` was refused as "NOT NULL, so semis always draws
+  it", which it did not: the default applied to every row. A column with a default that
+  `fill:` names, NOT NULL or not, is now drawn, from its CHECK's list when it has one; one
+  `fill:` does not name is still left to PostgreSQL, and `fill: all` draws no default
+  (fraiseql/semis#13).
+
 ## [0.7.2] - 2026-11-04
 
 ### Fixed
@@ -476,7 +487,8 @@ The first release.
   prints, and requires fraiseql-confiture 1.27, whose `CONFIG_003` refusal of a
   `--database-url` no longer repeats the password either.
 
-[Unreleased]: https://github.com/fraiseql/semis/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/fraiseql/semis/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/fraiseql/semis/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/fraiseql/semis/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/fraiseql/semis/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/fraiseql/semis/compare/v0.6.0...v0.7.0

@@ -198,6 +198,10 @@ A nullable column that is not a key — a soft-delete or an audit column — is 
 table, the columns it left `NULL`; `fill: all` draws every one but the soft-delete columns,
 `deleted_at` and `deleted_by`, and a type semis does not draw.
 
+A column with a default — `status TEXT NOT NULL DEFAULT 'draft'` — is left to PostgreSQL,
+unless `fill:` names it: then semis draws it, from its `CHECK (status IN (…))` list when
+it has one. `fill: all` never draws a default.
+
 ```yaml
   - name: shop.tb_customer
     count: 3

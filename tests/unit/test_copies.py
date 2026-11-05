@@ -171,6 +171,12 @@ def test_a_copy_of_a_value_semis_does_not_know_is_refused(
         _check(tmp_path, text)
 
 
+def test_a_copy_of_a_defaulted_column_the_parent_fills_checks(tmp_path: Path) -> None:
+    """fraiseql/semis#13: a column with a default that fill: names is drawn, so known."""
+    text = _scenario("label: fk_customer_org.status", organization=FLAT + "    fill: [status]\n")
+    assert _check(tmp_path, text)
+
+
 def test_a_copy_between_two_types_is_refused(tmp_path: Path) -> None:
     with pytest.raises(
         ScenarioError,

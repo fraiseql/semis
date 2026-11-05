@@ -89,7 +89,7 @@ foreign keys, whatever the order of the list.
 | `count` | an integer, 0 or more | required |
 | `overrides` | a mapping of a column to a value, a list with one value per row, or `null` for a nullable foreign key | none |
 | `providers` | a mapping of a column to the name of a registered provider, `<library>.<provider>` or a project's own | none |
-| `fill` | a list of nullable columns to draw rather than write `NULL`, or `all` for every one | none: a nullable column nobody names is `NULL` |
+| `fill` | a list of columns to draw: nullable ones rather than write `NULL`, ones with a default rather than leave it to PostgreSQL; or `all`, every nullable one with no default | none: a nullable column nobody names is `NULL`, a default is PostgreSQL's |
 | `trusts_trigger` | a list of writable columns a trigger fills, left out of the seed: a NOT NULL one is not refused for its absence | none |
 | `hierarchy` | the tree of a table whose foreign key points at itself | none, and required for such a table unless its self-referencing key is overridden `null`, for a flat set, or trusted to a trigger |
 | `translations` | the schema-qualified table each row's translations are written to, one row per locale of `locales:`, or `true` for the table `semis.yaml`'s [translations rule](/reference/semis-yaml/#translations) names | none |
@@ -102,7 +102,8 @@ overridden and trusted, and a provider no project or library registers. See
 
 ## Which columns are drawn
 
-A NOT NULL column is always drawn, unless it has a default, which PostgreSQL applies. A
+A NOT NULL column is always drawn, unless it has a default, which PostgreSQL applies
+unless `fill:` names the column. A
 **nullable** column that is not a foreign key is written `NULL`, unless the scenario names
 it: by an override, by a `providers:` entry for it, or under `fill:`. A provider library's rule
 matching the column does not name it: a library says how a column is filled when it is,
@@ -140,9 +141,9 @@ shop.tb_customer leaves last_ip NULL; semis draws no inet: an override or a prov
 ```
 
 A `fill:` entry that
-names no nullable column semis would write `NULL` is refused, naming the table, the
-column and why: unknown or not writable, NOT NULL, a foreign key, a column with a
-default, the natural id or the slug, a column trusted to a trigger, or the hierarchy's
+names no column semis would write `NULL` or leave to its default is refused, naming the
+table, the column and why: unknown or not writable, NOT NULL with no default, a foreign
+key, the natural id or the slug, a column trusted to a trigger, or the hierarchy's
 `path`, which read-back fills from the keys. So is one of a type semis does not draw.
 
 ## Copied columns

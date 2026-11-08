@@ -145,6 +145,17 @@ A project with no tenant table lists its tenants' values in the scenario instead
 tenants: [00000000-0000-4000-8000-00000000000a, 00000000-0000-4000-8000-00000000000b]
 ```
 
+## Every view sees more than one tenant
+
+Once a scenario is applied, [`semis coverage`](/reference/cli/#semis-coverage) says what
+each view, materialized view and TVIEW reading its tables holds: its rows, and, for a view
+that outputs the tenant column, how many tenants. A view holding one tenant's rows cannot
+show that another's are hidden; in CI, `--fail-on-single-tenant` makes that a failure:
+
+```bash
+semis coverage scenarios/two_tenants.yaml --fail-on-single-tenant
+```
+
 ## Next steps
 
 - [The scenario file](/reference/scenario-file/): `tenants:` and `crosses_tenants:`

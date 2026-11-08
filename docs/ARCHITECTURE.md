@@ -2,7 +2,7 @@
 
 **Version**: 1.2
 **Date**: 2026-11-03
-**Depends on**: `fraiseql-confiture>=1.32,<2`, Python 3.14
+**Depends on**: `fraiseql-confiture>=1.47,<2`, Python 3.14
 **Companion documents**: [PRD.md](./PRD.md) (what semis is for), [../README.md](../README.md) (how it is used)
 
 > Every confiture behaviour this document states was measured against a trinity-pattern
@@ -38,6 +38,7 @@ the second kind only, and asks `confiture.platform` the first kind every time.
 | Which columns may a writer supply | `writable_columns` |
 | What must a value respect — type, NOT NULL, UNIQUE, CHECK, enum, FK target | `column_facts` |
 | Which column is the surrogate key, which the natural id | `naming_hints` |
+| Which columns a view outputs, which relations it reads through other views | `view_columns`, `view_reads` |
 | How a seed file is written, applied, validated | `write_copy_seed` / `write_insert_seed`, `apply_seeds`, `validate_seeds` |
 | **What a value looks like** | **semis** — Faker, locales, domain providers |
 | **Which rows exist, how many, in what scenario** | **semis** — scenarios |
@@ -87,6 +88,7 @@ composes DDL, and never emits an `INSERT` or a `COPY` block by hand; each is one
 | `translation.py` | `Translation`, `TranslationTable`, the pseudo-locale's transform and coverage's choice of rows — a scenario's translation rows (§5) | — |
 | `tenancy.py` | `TenancyRule`, `Tenants`, `Spread` — which tables a run spreads over its tenants, and each row's tenant (§5) | — |
 | `emit.py` | A run in a declared mode: walked, written, and in read-back applied and learned | — |
+| `view_coverage.py` | `ViewCount` — which views a scenario's tables reach, and each one's rows and tenants (D56) | `readback` |
 | `pin.py` | `SchemaPin` — the digest a scenario's pin records, its projection, and what moved (§8) | — |
 | `pin_file.py` | `<name>.pin.json` beside a scenario: where it lives, read and written (§8) | the file system |
 | `scenario.py` | `Scenario`, `TableSpec`, `ScenarioManager` — a run, checked, executed, applied, reset or pinned | — |
@@ -281,8 +283,9 @@ counting what a table keeps and restarting the identity of one it empties, and b
 that locking the tables that reference the run's and counting their rows pointing at the
 scenario's — a run table narrowed to the rows outside its own range; reading an existing
 table's rows (D36), every one or, with the `WHERE` as `<where>`, those `where:` names,
-selecting its `pk_*` and only the columns asked for; learning keys; and setting a
-hierarchy's paths from them (below):
+selecting its `pk_*` and only the columns asked for; learning keys; setting a
+hierarchy's paths from them (below); and, for `semis coverage` (D56), counting a view's
+rows, and its tenants when it exposes the tenant column, in a read-only transaction:
 
 ```sql
 SELECT pg_advisory_xact_lock(%s, %s)
@@ -295,6 +298,8 @@ DELETE FROM <schema>.<table> AS t USING <parent_schema>.<parent> AS p
   WHERE t.<key> = p.<parent_column> AND p.<natural_id> BETWEEN %s AND %s
 
 SELECT count(*) FROM <schema>.<table>
+
+SELECT count(*), count(DISTINCT <tenant_column>) FROM <schema>.<view>
 
 LOCK TABLE <tables> IN SHARE MODE
 
@@ -724,9 +729,13 @@ and exits 1 on a `CRITICAL` or `ERROR`, as `list-scenarios` exits 1 on a shared 
 | **#530** | level 3 judged a key with no `REFERENCES` — a key into a partitioned table cannot have one — by its name, so a role-named key its resolver maps was an ERROR | 1.27 | pinned by a contract test: the key is resolved by what its resolver joins |
 | **#666** | level 5 reported nothing when an inner-join resolver dropped a staged row, so a stale UUID passed every level | 1.32 | pinned by a contract test: `STAGED_ROW_NOT_PROMOTED` |
 | **#537** | a `--database-url` refused as `CONFIG_003` was repeated whole, password included | 1.27 | pinned by a contract test; semis still masks a URL's password in whatever a refusal prints (§9) |
+| **#812** | `confiture.platform` published a view as its name and definition: not the columns it outputs, nor the relations it reads | 1.46 | `view_columns` and `view_reads`, read by `semis coverage` (D56) |
+| **#815** | `ObjectRef.display` spelled a table one way from DDL and another from a live database, and was the only key semis had | 1.46 | `ObjectRef.identity`, the `(schema, name)` key, wherever semis matches references (D54) |
 
-The floor is 1.32, the first whose level 5 reports a dropped row, and the lock the newest release semis is measured on. A higher floor would be a cost to a project whose `pg_tviews` is older: since 1.37 confiture refuses to read a server below 0.1.0-beta.30. Confiture requires Python 3.14, and so does
-semis.
+The floor is 1.47, the first release measured with the view API `semis coverage` reads,
+and the lock the newest release semis is measured on. It costs a project whose
+`pg_tviews` is older than 0.1.0-beta.30, which confiture refuses to read since 1.37.
+Confiture requires Python 3.14, and so does semis.
 The explicit file lists are what semis would do anyway, so they stay.
 
 ---
@@ -809,6 +818,7 @@ semis does not:
 | D53 | The floors are proven on the integration suite as well as the unit suite: CI's integration job runs it under `uv run --resolution lowest-direct`, on both PostgreSQL versions, since only it reaches confiture's executor. psycopg's floor is 3.3.0, the first release that executes the PEP 750 template strings confiture composes its SQL with; at 3.2.13, 105 of 138 integration tests fail on `expected bytes, string.templatelib.Template found`. confiture's own `psycopg>=3.1.0` is reported upstream, not relied on | 2026-11-04 |
 | D54 | semis names a table `schema.name`, through `schema.qualified(ref)`, whichever source read it: confiture's `ObjectRef.display` drops `public.` from a table its DDL reader read and keeps it from a live database, so keying by it made a schema whose DDL leaves its tables unqualified unseedable. A table outside `public` is named as before. The inconsistency is reported upstream | 2026-11-04 |
 | D55 | A column with a default is left to PostgreSQL unless the table's `fill: [..]` names it, NOT NULL or not; then semis draws it as any other column, from its CHECK's list when it has one, and a copy may read it. `fill: all` draws no default: `all` is every column the run would otherwise write `NULL`. A NOT NULL column with no default is refused under `fill:`, being always drawn | fraiseql/semis#13, 2026-11-05 |
+| D56 | `semis coverage SCENARIO` reports, of one database, every view, materialized view and TVIEW of the model that reads a table the scenario writes, by confiture's `view_reads` (through views, matviews, TVIEWs and a TVIEW's `function_reads`, not a routine's body, which the report says), with `count(*)` and, when `view_columns` includes `tenancy:`'s column, `count(DISTINCT <column>)`, in a read-only transaction rolled back. Exit 0 by default, since some scenarios hold one tenant on purpose; `--fail-on-single-tenant` exits 1 when a multi-tenant view holds fewer than two. No allowlist in `semis.yaml`. A view whose columns confiture cannot name is its `SchemaError`, unwrapped. Floor `fraiseql-confiture>=1.47` | fraiseql/semis#9, owner, 2026-11-08 |
 
 ### On the UUID encoding's own arithmetic (D6)
 

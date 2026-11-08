@@ -12,7 +12,7 @@ confiture's exit code and hint. Anything else is a bug, and keeps its traceback.
 | Code | Means |
 |---|---|
 | `0` | The command did what it says. `validate-seeds` with findings of `WARNING` or `INFO` only exits 0. |
-| `1` | semis refused: a scenario, a project, a row, a pin, a scenario already applied, a reset it cannot scope or that another row blocks, a database it cannot reach or whose schema is not built. Also `semis validate-seeds` with a `CRITICAL` or `ERROR` finding, and `semis list-scenarios` when two files share a scenario id. |
+| `1` | semis refused: a scenario, a project, a row, a pin, a scenario already applied, a reset it cannot scope or that another row blocks, a database it cannot reach or whose schema is not built. Also `semis validate-seeds` with a `CRITICAL` or `ERROR` finding, `semis list-scenarios` when two files share a scenario id, and `semis coverage --fail-on-single-tenant` when a view that outputs the tenant column holds fewer than two tenants. |
 | `2` | The command line is wrong: an unknown command or option, a missing argument, `--output` missing where seeds are written, a UUID `decode-uuid` is given that semis did not encode. |
 | `4` | confiture refused the schema: a table or column not in it, a foreign-key cycle. |
 | `5` | confiture refused a seed or a configuration: a seed file PostgreSQL rejects on apply, a database URL that is not one, two database URLs given at once. |

@@ -38,7 +38,7 @@ their lock.
 ## Install
 
 ```bash
-uv add fraiseql-semis          # brings fraiseql-confiture>=1.32,<2
+uv add fraiseql-semis          # brings fraiseql-confiture>=1.47,<2
 ```
 
 semis runs on Python 3.14 and writes to PostgreSQL 16 or later.
@@ -272,6 +272,7 @@ semis seeds scenarios/minimal_seed.yaml --dry-run          # every row checked, 
 semis apply scenarios/minimal_seed.yaml -o db/seeds/run    # writes and applies, one transaction
 semis apply scenarios/minimal_seed.yaml                    # applies, and keeps no file
 semis reset scenarios/minimal_seed.yaml                    # deletes the scenario's rows, only those
+semis coverage scenarios/minimal_seed.yaml                 # rows and tenants of each view it reaches
 semis generate scenarios/minimal_seed.yaml -o db/seeds/run # seeds for prep-seed, apply for read-back
 semis validate scenarios/minimal_seed.yaml                 # schema and pin checked, no rows drawn
 semis pin scenarios/minimal_seed.yaml                      # writes minimal_seed.pin.json beside it

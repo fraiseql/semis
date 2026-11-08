@@ -14,6 +14,8 @@ SEMIS_USES = (
     "writable_columns",
     "column_facts",
     "naming_hints",
+    "view_columns",
+    "view_reads",
     "write_copy_seed",
     "write_insert_seed",
     "apply_seeds",

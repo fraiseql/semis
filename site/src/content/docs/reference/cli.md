@@ -11,6 +11,7 @@ the schema, the table codes and the scenarios directory. `semis --help` and
 |---|---|---|
 | [`semis seeds`](#semis-seeds) | writes a prep-seed scenario's seed files | no |
 | [`semis apply`](#semis-apply) | writes a scenario's seeds and applies them, in one transaction | yes |
+| [`semis coverage`](#semis-coverage) | counts the rows and tenants of each view a scenario's tables reach | yes, read-only |
 | [`semis generate`](#semis-generate) | runs a scenario in its mode: `seeds` for prep-seed, `apply` for read-back | read-back only |
 | [`semis table`](#semis-table) | runs one table, as a scenario of that table alone | read-back only |
 | [`semis validate`](#semis-validate) | checks a scenario against the schema and its pin, drawing no rows | for a `database:` schema |
@@ -134,6 +135,64 @@ row starts pointing in meanwhile.
 | `--config`, `-c` | a file | The project file. Default: `./semis.yaml`. |
 | `--database-url`, `-d` | a URL | The database to reset. See [the database URL](#the-database-url). |
 | `--dry-run` | | Delete the scenario's rows, then roll back: nothing is lost. |
+
+## semis coverage
+
+`semis coverage [OPTIONS] SCENARIO` says, of a database the scenario was applied to, what
+each view its rows reach holds: every view, materialized view and TVIEW that reads a
+table the scenario writes, directly or through other views, with its rows and, when it
+outputs the tenant column `semis.yaml`'s [`tenancy:`](/reference/semis-yaml/) names, how
+many distinct tenants they belong to. It applies nothing: the database is read in a
+read-only transaction, rolled back. One run reads one database, for one scenario.
+
+```text
+view                    rows  tenants
+shop.mv_customer_stats     0        -  no rows
+shop.tv_order             40        2
+shop.v_customer           12        1  one tenant
+shop.v_order_line        120        2
+a view that reads a table only through a routine's body is not listed
+```
+
+A view that does not output the tenant column shows `-`. Beside a count, `no rows` says
+the view is empty (a materialized view is filled only when it is refreshed), `one
+tenant` that a test of tenant isolation over it has no other tenant's rows to hide, and
+`no tenant` that every row's tenant column is `NULL`. confiture follows views,
+materialized views and TVIEWs, and a TVIEW's `function_reads`, but not a routine's body:
+a view reading a table only through a function it calls is not listed, and the report
+says so.
+
+With `--format json`, the report is a JSON list, one object per view, and that last line
+goes to stderr:
+
+```json
+[
+  {
+    "view": "shop.v_customer",
+    "kind": "view",
+    "rows": 12,
+    "tenants": 1,
+    "single_tenant": true
+  }
+]
+```
+
+`kind` is `view`, `matview` or `tview`; `tenants` is `null` for a view that does not
+output the tenant column. `coverage` exits 0 whatever it finds: some scenarios hold one
+tenant on purpose. With `--fail-on-single-tenant`, it exits 1 when a view that outputs
+the tenant column holds fewer than two tenants, and says how many on stderr; a project
+with no `tenancy:` is refused that flag.
+
+A view whose columns confiture cannot name, a `*` over a relation the schema does not
+hold, is refused with confiture's `SchemaError`, exit 4, naming the view.
+
+| Argument or option | Takes | Description |
+|---|---|---|
+| `SCENARIO` | a file | The scenario's YAML file: its tables are the ones a view must reach. Required. |
+| `--config`, `-c` | a file | The project file. Default: `./semis.yaml`. |
+| `--database-url`, `-d` | a URL | The database to read. See [the database URL](#the-database-url). |
+| `--format` | `table` or `json` | The report's form. Default: `table`. |
+| `--fail-on-single-tenant` | | Exit 1 when a view that outputs the tenant column holds fewer than two tenants. |
 
 ## semis generate
 

@@ -3,11 +3,11 @@
 from pathlib import Path
 
 import pytest
-from confiture.platform import ConfigurationError, NotInModelError
+from confiture.platform import ConfigurationError, NotInModelError, parse_schema
 
 from fraiseql_semis.codes import TableCodes
 from fraiseql_semis.errors import CodeRegistryError
-from fraiseql_semis.schema import SchemaFacts
+from fraiseql_semis.schema import LiveSchema, SchemaFacts, qualified
 from tests.ddl import CODES, TRINITY
 
 
@@ -91,3 +91,50 @@ def test_a_table_the_ddl_leaves_unqualified_is_named_in_public() -> None:
         0x0A000001,
         None,
     ]
+
+
+def test_references_into_match_a_target_by_its_identity() -> None:
+    """A key whose REFERENCES leaves the schema out still names its table: confiture's
+    identity folds the default schema in, whichever reader built the model."""
+    model = parse_schema(
+        "CREATE TABLE tb_a (pk_a int PRIMARY KEY);"
+        "CREATE TABLE tb_b (pk_b int PRIMARY KEY, fk_a int REFERENCES tb_a);"
+    )
+    (target,) = (ref for ref in model.tables if ref.name == "tb_a")
+    (reference,) = LiveSchema(model).references_into([target])
+    assert (qualified(reference.table), reference.target) == ("public.tb_b", target)
+
+
+VIEWS = """
+CREATE SCHEMA app;
+CREATE TABLE app.tb_item (pk_item bigint PRIMARY KEY, id uuid NOT NULL, tenant_id uuid);
+CREATE VIEW app.v_item AS SELECT id, tenant_id FROM app.tb_item;
+CREATE VIEW app.v_ids AS SELECT id FROM app.v_item;
+CREATE MATERIALIZED VIEW app.mv_item AS SELECT id FROM app.tb_item;
+CREATE TABLE app.tv_item AS SELECT pk_item, id, tenant_id FROM app.tb_item;
+"""
+
+
+def _views() -> SchemaFacts:
+    return SchemaFacts.from_source(VIEWS, table_codes=TableCodes({}))
+
+
+def test_views_are_the_views_matviews_and_tviews_by_name() -> None:
+    assert [(qualified(ref), ref.kind) for ref in _views().views()] == [
+        ("app.mv_item", "matview"),
+        ("app.tv_item", "tview"),
+        ("app.v_ids", "view"),
+        ("app.v_item", "view"),
+    ]
+
+
+def test_a_view_reads_the_tables_under_the_views_it_reads() -> None:
+    facts = _views()
+    (ids,) = (ref for ref in facts.views() if ref.name == "v_ids")
+    assert facts.reads(ids) == {("app", "v_item"), ("app", "tb_item")}
+
+
+def test_a_view_columns_are_confitures() -> None:
+    facts = _views()
+    (tview,) = (ref for ref in facts.views() if ref.kind == "tview")
+    assert facts.view_columns(tview) == ("pk_item", "id", "tenant_id")

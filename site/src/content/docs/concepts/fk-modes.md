@@ -83,8 +83,9 @@ overlap, asking whether it is
 [`semis reset`](/reference/cli/#semis-reset) and restarting the identity of a table it
 empties, once it has locked the tables that
 reference the run's and found none of their rows pointing at the scenario's, reading the keys of
-[existing rows](#parents-already-in-the-database), learning keys, and setting a
-[hierarchy's](/guides/scenarios/#hierarchies) paths from them.
+[existing rows](#parents-already-in-the-database), learning keys, setting a
+[hierarchy's](/guides/scenarios/#hierarchies) paths from them, and counting a view's rows
+and tenants for [`semis coverage`](/reference/cli/#semis-coverage).
 
 ```sql
 SELECT pg_advisory_xact_lock(%s, %s)
@@ -97,6 +98,8 @@ DELETE FROM <schema>.<table> AS t USING <parent_schema>.<parent> AS p
   WHERE t.<key> = p.<parent_column> AND p.<natural_id> BETWEEN %s AND %s
 
 SELECT count(*) FROM <schema>.<table>
+
+SELECT count(*), count(DISTINCT <tenant_column>) FROM <schema>.<view>
 
 LOCK TABLE <tables> IN SHARE MODE
 

@@ -10,7 +10,7 @@ from typer.core import TyperGroup
 from typer.testing import CliRunner, Result
 
 from fraiseql_semis.cli import app, main
-from fraiseql_semis.cli.main import _masked, _where
+from fraiseql_semis.cli.main import NOT_FOLLOWED, _coverage_lines, _masked, _where
 from fraiseql_semis.errors import UnreachableDatabaseError
 from fraiseql_semis.readback import checked_url
 from tests.ddl import TRANSLATED, TRANSLATED_CODES, TRINITY
@@ -959,3 +959,10 @@ def test_validate_prints_no_coverage_line_for_a_table_missing_no_label(tmp_path:
         app, ["validate", str(tmp_path / "scenarios" / "covered.yaml"), "-c", str(config)]
     )
     assert "missing" not in result.output
+
+
+def test_coverage_says_when_no_view_reads_the_scenarios_tables() -> None:
+    assert _coverage_lines((), "views") == [
+        "no view reads a table scenario views writes",
+        NOT_FOLLOWED,
+    ]

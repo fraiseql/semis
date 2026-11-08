@@ -6,6 +6,26 @@ All notable changes to fraiseql-semis are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-08
+
+### Added
+
+- **`semis coverage SCENARIO`**: of a database the scenario was applied to, every view,
+  materialized view and TVIEW that reads a table the scenario writes, directly or
+  through other views, with its rows and, when it outputs `tenancy:`'s column, its
+  distinct tenants; `no rows`, `one tenant` and `no tenant` are marked. It applies
+  nothing, in a read-only transaction. `--format json` gives a list of objects;
+  `--fail-on-single-tenant` exits 1 when a multi-tenant view holds fewer than two
+  tenants. A view reaching a table only through a routine's body is not listed, and
+  the report says so (fraiseql/semis#9). From Python, `ScenarioManager.coverage`
+  returns a `ViewCount` per view.
+
+### Changed
+
+- **fraiseql-confiture 1.47 or later is required**, for the view API `semis coverage`
+  reads. confiture refuses to read a database whose `pg_tviews` is older than
+  0.1.0-beta.30: upgrade the extension first.
+
 ## [0.7.3] - 2026-11-05
 
 ### Changed
@@ -487,7 +507,8 @@ The first release.
   prints, and requires fraiseql-confiture 1.27, whose `CONFIG_003` refusal of a
   `--database-url` no longer repeats the password either.
 
-[Unreleased]: https://github.com/fraiseql/semis/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/fraiseql/semis/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/fraiseql/semis/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/fraiseql/semis/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/fraiseql/semis/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/fraiseql/semis/compare/v0.7.0...v0.7.1

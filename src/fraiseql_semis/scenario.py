@@ -16,7 +16,7 @@ from tempfile import TemporaryDirectory
 from typing import Literal, cast, get_args
 from uuid import UUID
 
-from fraiseql_semis import emit, pin_file, readback, seeds
+from fraiseql_semis import emit, pin_file, readback, seeds, view_coverage
 from fraiseql_semis.errors import (
     AlreadyAppliedError,
     CodeRegistryError,
@@ -66,6 +66,7 @@ from fraiseql_semis.translation import (
     locale_reads,
 )
 from fraiseql_semis.uuid_generator import scenario_bounds
+from fraiseql_semis.view_coverage import ViewCount
 
 MODES: tuple[Mode, ...] = get_args(Mode)
 
@@ -956,6 +957,22 @@ class ScenarioManager:
                 restarted = not kept if identities else None
                 deleted.append(Deleted(qualified(ref), rows, kept, restarted))
         return tuple(deleted)
+
+    def coverage(self, scenario: Scenario, *, connection: Connection) -> tuple[ViewCount, ...]:
+        """What each view holds that a table *scenario* writes reaches, as *connection*
+        sees it: its rows, and its tenants when it outputs the project's tenant column.
+
+        Nothing is written; the caller owns the transaction. A view that reaches a table
+        only through a routine's body is not found (D56).
+        """
+        self._require_tables(scenario)
+        with _naming(scenario.name):
+            return view_coverage.count(
+                self._facts,
+                self._written_tables(scenario),
+                tenant_column=None if self._tenancy is None else self._tenancy.column,
+                connection=connection,
+            )
 
     def _refuse_pointed_at(
         self,

@@ -6,7 +6,7 @@ two declarations cannot drift apart; ``tests/unit/test_cli_options.py`` fails on
 """
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 import typer
@@ -135,5 +135,16 @@ MaxLevel = Annotated[
         min=1,
         max=5,
         show_default=False,
+    ),
+]
+ReportFormat = Annotated[
+    Literal["table", "json"],
+    typer.Option("--format", help="The report's form: a table, or a JSON list of objects."),
+]
+FailOnSingleTenant = Annotated[
+    bool,
+    typer.Option(
+        "--fail-on-single-tenant",
+        help="Exit 1 when a view that outputs the tenant column holds fewer than two tenants.",
     ),
 ]

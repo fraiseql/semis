@@ -30,6 +30,10 @@ ALLOWED: dict[str, tuple[frozenset[str] | None, str]] = {
         frozenset({"Format", "Mode", "PrepSeedReport"}),
         "the choices --format and --mode take, and the report validate-seeds prints",
     ),
+    "fraiseql_semis.view_coverage": (
+        frozenset({"ViewCount"}),
+        "the counts semis coverage prints, which the library made",
+    ),
     "fraiseql_semis.uuid_generator": (
         frozenset({"SemanticUUIDGenerator"}),
         "decode-uuid decodes, and generates nothing",

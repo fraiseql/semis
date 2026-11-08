@@ -52,12 +52,13 @@ from fraiseql_semis import (
     seeds,
 )
 from fraiseql_semis.cli import app
-from fraiseql_semis.cli.main import _deleted
+from fraiseql_semis.cli.main import _coverage_lines, _deleted, _view_object
 from fraiseql_semis.generator import TablePlan
 from fraiseql_semis.project import ENTRY_POINTS
 from fraiseql_semis.providers import SHIPPED
 from fraiseql_semis.tenancy import TenancyRule, Tenants
 from fraiseql_semis.translation import Translation, TranslationTable
+from fraiseql_semis.view_coverage import ViewCount
 from tests.ddl import CODES, HIERARCHY, HIERARCHY_CODES, TRINITY, WORKED
 
 ROOT = Path(__file__).parents[2]
@@ -207,7 +208,7 @@ def _doctest(block: Block, globs: dict[str, object]) -> None:
 # README ---------------------------------------------------------------------------------
 
 
-_INSTALL = "uv add fraiseql-semis          # brings fraiseql-confiture>=1.32,<2"
+_INSTALL = "uv add fraiseql-semis          # brings fraiseql-confiture>=1.47,<2"
 
 
 @check("README.md", _INSTALL)
@@ -662,6 +663,8 @@ def _one_sql_site(block: Block, _context: Context) -> None:
         "{column}": "<parent_column>",
         "{key}": "<key>",
         "{scoped}": "<scoped>",
+        "{view}": "<view>",
+        "{tenant}": "<tenant_column>",
     }
     shapes = []
     for template in (v for v in vars(readback).values() if isinstance(v, sql.Composable)):
@@ -1247,6 +1250,37 @@ def _reset_report(block: Block, _context: Context) -> None:
         "committed",
     ]
     assert lines == block.text.splitlines()
+
+
+_VIEW_COUNTS = (
+    ViewCount("shop.mv_customer_stats", "matview", 0, None),
+    ViewCount("shop.tv_order", "tview", 40, 2),
+    ViewCount("shop.v_customer", "view", 12, 1),
+    ViewCount("shop.v_order_line", "view", 120, 2),
+)
+
+
+@check(_page("reference/cli.md"), "view                    rows  tenants")
+def _coverage_report(block: Block, _context: Context) -> None:
+    """The lines semis coverage prints, from the counts the page describes."""
+    assert _coverage_lines(_VIEW_COUNTS, "orders") == block.text.splitlines()
+
+
+@check(_page("reference/cli.md"), "[")
+def _coverage_json(block: Block, _context: Context) -> None:
+    """The object --format json prints for the report's one-tenant view."""
+    assert json.loads(block.text) == [_view_object(_VIEW_COUNTS[2])]
+
+
+@check(
+    _page("guides/tenants.md"), "semis coverage scenarios/two_tenants.yaml --fail-on-single-tenant"
+)
+def _coverage_in_ci(block: Block, context: Context) -> None:
+    """The command parses, with the guide's scenario in place."""
+    context.monkeypatch.chdir(context.tmp_path)
+    Path("scenarios").mkdir()
+    Path("scenarios/two_tenants.yaml").write_text("")
+    _parses(shlex.split(block.text))
 
 
 _MULTILINGUAL = _page("guides/multilingual.md")

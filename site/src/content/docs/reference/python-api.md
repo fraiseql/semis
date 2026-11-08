@@ -95,6 +95,7 @@ ScenarioManager.execute(scenario, out_dir, *, connection=None, format=None, no_p
 ScenarioManager.apply(scenario, out_dir=None, *, connection, format=None, no_pin=False)
 ScenarioManager.rehearse(scenario, *, connection=None, format=None, no_pin=False)
 ScenarioManager.reset(scenario, *, connection)
+ScenarioManager.coverage(scenario, *, connection)
 ScenarioManager.pin(scenario, path, *, check=False, connection=None)
 ScenarioManager.check(scenario, *, no_pin=False)
 ScenarioManager.validate(scenario, *, schema_dir, max_level=3, connection=None, catalog_schema=None, format=None, no_pin=False)
@@ -131,6 +132,14 @@ holds.
   per table: the rows deleted, the other rows it still holds, and whether its identity
   was restarted, `None` for a table with none. A row the scenario did not write
   pointing at one it did is refused with `ResetBlockedError`. A table with no uuid `id` is refused with `ResetScopeError`.
+- `coverage` counts, on `connection`, every view, materialized view and TVIEW that
+  reads a table the run writes, directly or through other views, as
+  [`semis coverage`](/reference/cli/#semis-coverage) does, and writes nothing. It returns
+  a `ViewCount(view, kind, rows, tenants)` per view, by name: `tenants` is how many
+  distinct values its rows hold in the project's tenant column, `None` for a view that
+  does not output it; `single_tenant` is true when a view that does holds fewer than two,
+  and `mark` is what the report prints beside it. A view that reaches a table only
+  through a routine's body is not found.
 - `pin` takes the scenario's schema pin from this schema into `<name>.pin.json` beside
   the scenario file at `path`, as `semis pin` does, and returns a `PinChange`: the `path`,
   the schema's `pin`, the `previous` one the file kept, what `changes` moved between

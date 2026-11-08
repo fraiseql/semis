@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fraiseql-semis"
-version = "0.7.3"
+version = "0.8.0"
 description = "Semantic UUID-encoded fake data generator for PostgreSQL trinity pattern schemas"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -41,9 +41,11 @@ dependencies = [
     # only a UUID column's value for a UUID; resolvers are found by routine name; every
     # level reads the same files; `validate_seeds` takes a connection (1.23). Each
     # staging table's final table is the one its resolver fills, in any schema; a wide
-    # RETURNS TABLE parses (1.24). Floor 1.32: level 5 reports a row an inner join drops; the lock is the release measured on, and the
-    # one that sets the Python floor, 3.14.
-    "fraiseql-confiture>=1.32,<2",
+    # RETURNS TABLE parses (1.24). Level 5 reports a row an inner join drops (1.32).
+    # Floor 1.47: a view's output columns and the relations it reads, through views and
+    # TVIEWs, and `ObjectRef.identity` (1.46; 1.47 is the release measured on). The lock
+    # is the release measured on, and the one that sets the Python floor, 3.14.
+    "fraiseql-confiture>=1.47,<2",
     "faker>=24.0.0",
     "pyyaml>=6.0.1",
     # Read-back mode only: learning a parent's pk after its seed is applied. Schema

@@ -31,6 +31,8 @@ from confiture.platform import (
     introspect,
     naming_hints,
     parse_schema,
+    view_columns,
+    view_reads,
     writable_columns,
 )
 
@@ -199,6 +201,21 @@ class SchemaFacts:
         """Parents before children, from the real foreign keys."""
         return dependency_order(self._model, tables=tables)
 
+    def views(self) -> tuple[ObjectRef, ...]:
+        """The model's views, materialized views and TVIEWs, by their qualified names."""
+        return tuple(sorted((*self._model.views, *self._model.tviews), key=qualified))
+
+    def reads(self, view: ObjectRef) -> frozenset[tuple[str, str]]:
+        """The relations *view* reads, directly or through the views it reads, each by its
+        ``(schema, name)`` identity. A routine's body is not followed. A definition that
+        does not parse raises confiture's ``SchemaError``."""
+        return frozenset(ref.identity for ref in view_reads(self._model, view))
+
+    def view_columns(self, view: ObjectRef) -> tuple[str, ...]:
+        """The columns *view* outputs, in order. A ``*`` over a relation the model does
+        not hold raises confiture's ``SchemaError``, naming the view."""
+        return view_columns(self._model, view)
+
 
 @dataclass(frozen=True)
 class Reference:
@@ -227,13 +244,15 @@ class LiveSchema:
         """Every foreign key into one of *tables*, from a table in any schema: a key from
         a table semis never reads is seen too. In the order of the referencing tables'
         names. A live model names the referenced columns even where the DDL named none
-        (``tests/contract/test_introspect_names_every_referencing_key.py``)."""
-        wanted: dict[tuple[str, str], ObjectRef] = {(t.schema, t.name): t for t in tables}
+        (``tests/contract/test_introspect_names_every_referencing_key.py``). A target is
+        matched by confiture's ``identity``, which folds in the default schema a
+        ``REFERENCES`` may leave out."""
+        wanted: dict[tuple[str, str], ObjectRef] = {table.identity: table for table in tables}
         references: list[Reference] = []
         for ref, table in sorted(self.model.tables.items(), key=lambda item: qualified(item[0])):
             for constraint in table.constraints:
                 target = constraint.ref_table
-                into = None if target is None else wanted.get((target.schema or "", target.name))
+                into = None if target is None else wanted.get(target.identity)
                 if into is None:
                     continue
                 references.append(
@@ -246,11 +265,7 @@ class LiveSchema:
     def identities(self, table: ObjectRef) -> tuple[str, ...]:
         """*table*'s identity columns, whose sequences a reset restarts once it is empty."""
         found = next(
-            (
-                found
-                for ref, found in self.model.tables.items()
-                if qualified(ref) == qualified(table)
-            ),
+            (found for ref, found in self.model.tables.items() if ref.identity == table.identity),
             None,
         )
         columns = found.columns if found is not None else ()

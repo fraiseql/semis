@@ -2,8 +2,8 @@
 
 The one module that imports ``psycopg``, and the only SQL semis writes (D9): taking a
 scenario's lock, asking whether its rows are already applied, deleting them for a reset,
-reading the keys of rows a run did not write, learning keys, and setting a hierarchy's
-paths from them. Their identifiers come from the model, composed with
+reading the keys of rows a run did not write, learning keys, setting a hierarchy's
+paths from them, and counting a view's rows and tenants. Their identifiers come from the model, composed with
 ``psycopg.sql.Identifier``, and their values are parameters.
 """
 
@@ -30,6 +30,7 @@ _DELETE_THROUGH = sql.SQL(
     " WHERE t.{key} = p.{column} AND p.{id} BETWEEN %s AND %s"
 )
 _COUNT = sql.SQL("SELECT count(*) FROM {schema}.{table}")
+_COUNT_TENANTS = sql.SQL("SELECT count(*), count(DISTINCT {tenant}) FROM {schema}.{view}")
 _LOCK_SHARED = sql.SQL("LOCK TABLE {tables} IN SHARE MODE")
 _POINTING = sql.SQL(
     "SELECT count(*) FROM {schema}.{table} AS r WHERE EXISTS (SELECT FROM {target_schema}."
@@ -56,13 +57,17 @@ _SET_PATHS = sql.SQL(
 
 
 @contextmanager
-def transaction(database_url: str, *, commit: bool = True) -> Iterator[Connection]:
+def transaction(
+    database_url: str, *, commit: bool = True, read_only: bool = False
+) -> Iterator[Connection]:
     """A connection whose one transaction is committed when the block ends, unless *commit*
-    is false, and rolled back if it raises."""
+    is false, and rolled back if it raises. *read_only* makes PostgreSQL refuse any
+    write in it."""
     try:
         connection = psycopg.connect(checked_url(database_url))
     except psycopg.OperationalError as error:
         raise _unreachable(database_url, error) from error
+    connection.read_only = read_only
     with connection:
         try:
             yield connection
@@ -269,6 +274,24 @@ def count(connection: Connection, table: ObjectRef) -> int:
     query = _COUNT.format(schema=sql.Identifier(table.schema), table=sql.Identifier(table.name))
     (rows,) = connection.execute(query).fetchone()
     return rows
+
+
+def count_view(
+    connection: Connection, view: ObjectRef, tenant_column: str | None
+) -> tuple[int, int | None]:
+    """How many rows *view* holds, and how many distinct values its *tenant_column*: a
+    ``NULL`` is no tenant. ``None`` for the tenants when no column is given."""
+    if tenant_column is None:
+        with _built(view):
+            return count(connection, view), None
+    query = _COUNT_TENANTS.format(
+        tenant=sql.Identifier(tenant_column),
+        schema=sql.Identifier(view.schema),
+        view=sql.Identifier(view.name),
+    )
+    with _built(view):
+        (rows, tenants) = connection.execute(query).fetchone()
+    return rows, tenants
 
 
 def existing_keys(

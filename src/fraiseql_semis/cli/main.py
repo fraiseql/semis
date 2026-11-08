@@ -4,6 +4,7 @@ Each command loads what it needs and hands it to the library; none of them decid
 row holds.
 """
 
+import json
 import re
 from collections import Counter
 from collections.abc import Callable
@@ -22,6 +23,7 @@ from fraiseql_semis.cli.options import (
     DryRunInMode,
     DryRunReset,
     DryRunWrite,
+    FailOnSingleTenant,
     Format,
     Locale,
     MaxLevel,
@@ -30,6 +32,7 @@ from fraiseql_semis.cli.options import (
     NoPin,
     Output,
     PinCheck,
+    ReportFormat,
     Reset,
     ScenarioFile,
     ScenarioId,
@@ -49,6 +52,7 @@ from fraiseql_semis.scenario_file import init_scenario as new_scenario
 from fraiseql_semis.schema import ConfiturError
 from fraiseql_semis.seeds import PrepSeedReport
 from fraiseql_semis.uuid_generator import SemanticUUIDGenerator
+from fraiseql_semis.view_coverage import ViewCount
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -269,6 +273,47 @@ def reset(
     for table in deleted:
         typer.echo(_deleted(table))
     typer.echo("rolled back: nothing was deleted" if dry_run else "committed")
+
+
+@app.command()
+@_refusals
+def coverage(
+    scenario: ScenarioFile,
+    *,
+    config: Config = None,
+    database_url: DatabaseUrl = None,
+    format: ReportFormat = "table",
+    fail_on_single_tenant: FailOnSingleTenant = False,
+) -> None:
+    """Count the rows and tenants of every view a scenario's tables reach. Applies
+    nothing: the database is read in a read-only transaction, rolled back."""
+    project = _require(config)
+    if fail_on_single_tenant and project.tenancy is None:
+        raise ProjectError(
+            "--fail-on-single-tenant: semis.yaml names no tenancy: column, so no view is "
+            "multi-tenant",
+            resolution_hint="Name the tenant column in semis.yaml: tenancy: {column: tenant_id}.",
+        )
+    manager = project.manager(database_url=database_url)
+    loaded = manager.load(scenario, read_pin=False)
+    url = project.database_url(database_url, mutating=False)
+    with transaction(url, commit=False, read_only=True) as connection:
+        counts = manager.coverage(loaded, connection=connection)
+    if format == "json":
+        typer.echo(json.dumps([_view_object(count) for count in counts], indent=2))
+        typer.echo(NOT_FOLLOWED, err=True)
+    else:
+        for line in _coverage_lines(counts, loaded.name):
+            typer.echo(line)
+    single = sum(count.single_tenant for count in counts)
+    if fail_on_single_tenant and single:
+        assert project.tenancy is not None  # refused above without one
+        typer.echo(
+            f"{single} view{_plural(single)} that output{'s' if single == 1 else ''} "
+            f"{project.tenancy.column} hold{'s' if single == 1 else ''} fewer than two tenants",
+            err=True,
+        )
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -498,6 +543,34 @@ def _deleted(table: Deleted) -> str:
         said.append("identity restarted" if table.restarted else "identity not restarted")
     line = f"deleted {table.rows} row{_plural(table.rows)} from {table.table}"
     return "; ".join([line, ", ".join(said)]) if said else line
+
+
+NOT_FOLLOWED = "a view that reads a table only through a routine's body is not listed"
+"""What the coverage report says it cannot see: confiture does not read a routine's body."""
+
+
+def _coverage_lines(counts: tuple[ViewCount, ...], scenario: str) -> list[str]:
+    """The coverage report: a line per view, its rows and tenants, ``-`` for a view that
+    outputs no tenant column, then what it cannot see."""
+    if not counts:
+        return [f"no view reads a table scenario {scenario} writes", NOT_FOLLOWED]
+    width = max(len("view"), *(len(count.view) for count in counts))
+    lines = [f"{'view':<{width}}  {'rows':>4}  tenants"]
+    for count in counts:
+        tenants = "-" if count.tenants is None else str(count.tenants)
+        line = f"{count.view:<{width}}  {count.rows:>4}  {tenants:>7}"
+        lines.append(f"{line}  {count.mark}" if count.mark else line)
+    return [*lines, NOT_FOLLOWED]
+
+
+def _view_object(count: ViewCount) -> dict[str, object]:
+    return {
+        "view": count.view,
+        "kind": count.kind,
+        "rows": count.rows,
+        "tenants": count.tenants,
+        "single_tenant": count.single_tenant,
+    }
 
 
 def _notices(notices: tuple[str, ...]) -> None:

@@ -58,6 +58,7 @@ from fraiseql_semis.scenario_file import ScenarioEntry, catalogue, init_scenario
 from fraiseql_semis.schema import ColumnFacts, SchemaFacts, TableFacts
 from fraiseql_semis.translation import Locale
 from fraiseql_semis.uuid_generator import SemanticUUIDGenerator, UUIDFields
+from fraiseql_semis.view_coverage import ViewCount
 
 __version__ = version("fraiseql-semis")
 
@@ -107,6 +108,7 @@ __all__ = [
     "UUIDFields",
     "UnreachableDatabaseError",
     "Validation",
+    "ViewCount",
     "Violation",
     "catalogue",
     "check_row",

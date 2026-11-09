@@ -7,7 +7,7 @@ row holds.
 import json
 import re
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from functools import wraps
@@ -297,13 +297,15 @@ def coverage(
     manager = project.manager(database_url=database_url)
     loaded = manager.load(scenario, read_pin=False)
     url = project.database_url(database_url, mutating=False)
+    variables = project.coverage_variables
     with transaction(url, commit=False, read_only=True) as connection:
-        counts = manager.coverage(loaded, connection=connection)
+        counts = manager.coverage(loaded, connection=connection, session_variables=variables)
     if format == "json":
         typer.echo(json.dumps([_view_object(count) for count in counts], indent=2))
-        typer.echo(NOT_FOLLOWED, err=True)
+        for line in [*_read_with(variables), NOT_FOLLOWED]:
+            typer.echo(line, err=True)
     else:
-        for line in _coverage_lines(counts, loaded.name):
+        for line in _coverage_lines(counts, loaded.name, variables=variables):
             typer.echo(line)
     single = sum(count.single_tenant for count in counts)
     if fail_on_single_tenant and single:
@@ -549,18 +551,35 @@ NOT_FOLLOWED = "a view that reads a table only through a routine's body is not l
 """What the coverage report says it cannot see: confiture does not read a routine's body."""
 
 
-def _coverage_lines(counts: tuple[ViewCount, ...], scenario: str) -> list[str]:
-    """The coverage report: a line per view, its rows and tenants, ``-`` for a view that
-    outputs no tenant column, then what it cannot see."""
+def _read_with(variables: Mapping[str, str]) -> list[str]:
+    """The line naming the session variables the report read with, by name, each value
+    a PostgreSQL string literal, so an empty one or one holding ``, `` reads one way;
+    none when it read with none."""
+    if not variables:
+        return []
+    said = (f"{name}='{variables[name].replace("'", "''")}'" for name in sorted(variables))
+    return ["read with " + ", ".join(said)]
+
+
+def _coverage_lines(
+    counts: tuple[ViewCount, ...], scenario: str, *, variables: Mapping[str, str]
+) -> list[str]:
+    """The coverage report: what it read with, a line per view, its rows and tenants,
+    ``-`` for a view that outputs no tenant column, then what it cannot see."""
     if not counts:
-        return [f"no view reads a table scenario {scenario} writes", NOT_FOLLOWED]
+        return [
+            *_read_with(variables),
+            f"no view reads a table scenario {scenario} writes",
+            NOT_FOLLOWED,
+        ]
     width = max(len("view"), *(len(count.view) for count in counts))
-    lines = [f"{'view':<{width}}  {'rows':>4}  tenants"]
+    rows = max(len("rows"), *(len(str(count.rows)) for count in counts))
+    lines = [f"{'view':<{width}}  {'rows':>{rows}}  tenants"]
     for count in counts:
         tenants = "-" if count.tenants is None else str(count.tenants)
-        line = f"{count.view:<{width}}  {count.rows:>4}  {tenants:>7}"
+        line = f"{count.view:<{width}}  {count.rows:>{rows}}  {tenants:>7}"
         lines.append(f"{line}  {count.mark}" if count.mark else line)
-    return [*lines, NOT_FOLLOWED]
+    return [*_read_with(variables), *lines, NOT_FOLLOWED]
 
 
 def _view_object(count: ViewCount) -> dict[str, object]:

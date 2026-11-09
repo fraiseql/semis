@@ -127,8 +127,9 @@ or drop `pseudo_locale:`.
 
 An app that picks a label by locale and falls back (the tenant's locale, its language,
 the default, the identifier) treats a missing translation as a silent degradation, and
-seeds with every label present never exercise it. `coverage:` gives a locale a share of
-each translated table's rows:
+seeds with every label present never exercise it. A scenario's `coverage:` gives a
+locale a share of each translated table's rows (`semis.yaml`'s
+[`coverage:`](/reference/semis-yaml/#coverage) is another key, for `semis coverage`):
 
 ```yaml
 locales: [fr-FR, en-GB, de-DE]

@@ -23,6 +23,7 @@ from fraiseql_semis.schema import SchemaFacts, database_url
 from fraiseql_semis.staging import Staging
 from fraiseql_semis.tenancy import TenancyRule
 from fraiseql_semis.translation import TranslationRule, template_is_valid
+from fraiseql_semis.view_coverage import session_variables
 
 DEFAULT_CONFIG = Path("semis.yaml")
 _PROJECT_KEYS = {
@@ -33,7 +34,14 @@ _PROJECT_KEYS = {
     "prep_seed",
     "translations",
     "tenancy",
+    "coverage",
 }
+_COVERAGE_KEYS = {"session_variables"}
+_COVERAGE_HINT = (
+    "semis.yaml's coverage: takes session_variables:, the settings semis coverage reads "
+    "with: coverage: {session_variables: {app.agent_role: manager}}. A locale's share of "
+    "labels is a scenario's coverage:."
+)
 _TENANCY_KEYS = {"column", "table", "exclude", "include"}
 _TENANCY_HINT = "Write tenancy: {column: tenant_id}, with table:, exclude: and include: as needed."
 _TRANSLATION_KEYS = {"table", "label_column", "locale_fk", "locale_table"}
@@ -96,7 +104,8 @@ class Project:
     resolvers that confiture's prep-seed levels read, and *catalog_schema* the final
     tables' fallback schema, passed only when named. *translations* is how its
     translation tables are named, and the columns they use. *tenancy* is how its
-    tenant-scoped tables are found, when it has tenants.
+    tenant-scoped tables are found, when it has tenants. *coverage_variables* are the
+    session variables ``semis coverage`` sets before it counts.
     """
 
     table_codes: TableCodes
@@ -109,6 +118,7 @@ class Project:
     catalog_schema: str | None = None
     translations: TranslationRule = field(default_factory=TranslationRule)
     tenancy: TenancyRule | None = None
+    coverage_variables: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def find(cls, config: Path | None) -> Project | None:
@@ -155,6 +165,7 @@ class Project:
             catalog_schema=catalog_schema,
             translations=_translations(path, data.get("translations", {})),
             tenancy=_tenancy(path, data["tenancy"]) if "tenancy" in data else None,
+            coverage_variables=_coverage(path, data.get("coverage", {})),
         )
 
     def database_url(self, flag: str | None = None, *, mutating: bool) -> str:
@@ -490,6 +501,18 @@ def _tenancy(path: Path, block: object) -> TenancyRule:
             resolution_hint="Name the table under one of the two.",
         )
     return TenancyRule(column, table=table, exclude=frozenset(exclude), include=dict(include))
+
+
+def _coverage(path: Path, block: object) -> dict[str, str]:
+    """``coverage:``: the session variables ``semis coverage`` reads with."""
+    where = f"{path}: coverage:"
+    if not isinstance(block, dict):
+        raise ProjectError(
+            f"{where} maps session_variables",
+            resolution_hint="Write coverage: {session_variables: {app.agent_role: manager}}.",
+        )
+    refuse_unknown(where, block, _COVERAGE_KEYS, error=ProjectError, hint=_COVERAGE_HINT)
+    return session_variables(block.get("session_variables", {}), f"{where} session_variables:")
 
 
 def _qualified(name: object) -> bool:

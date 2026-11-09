@@ -72,7 +72,10 @@ as written, so `0.29` of 100 keeps 29. `0` and `1` are allowed, and a locale not
 1. Which rows are left out does not depend on `seed:`. A mapping of anything else, a
 locale the scenario does not declare, a value outside 0 to 1, `.nan`, `.inf`, a boolean
 or a string, and `coverage:` with no `locales:` are refused. See
-[Gaps on purpose](/guides/multilingual/#gaps-on-purpose).
+[Gaps on purpose](/guides/multilingual/#gaps-on-purpose). It has nothing to do with
+`semis coverage`: the session variables that command reads with are `semis.yaml`'s
+[`coverage:`](/reference/semis-yaml/#coverage), and `session_variables:` here is refused,
+pointing there.
 
 A scenario's pin is not one of its keys: it is the file `<name>.pin.json` beside it,
 which `semis pin` writes. A `schema_pin:` block, where semis 0.2.0 kept it, is refused

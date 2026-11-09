@@ -88,7 +88,7 @@ composes DDL, and never emits an `INSERT` or a `COPY` block by hand; each is one
 | `translation.py` | `Translation`, `TranslationTable`, the pseudo-locale's transform and coverage's choice of rows — a scenario's translation rows (§5) | — |
 | `tenancy.py` | `TenancyRule`, `Tenants`, `Spread` — which tables a run spreads over its tenants, and each row's tenant (§5) | — |
 | `emit.py` | A run in a declared mode: walked, written, and in read-back applied and learned | — |
-| `view_coverage.py` | `ViewCount` — which views a scenario's tables reach, and each one's rows and tenants (D56) | `readback` |
+| `view_coverage.py` | `ViewCount` — which views a scenario's tables reach, and each one's rows and tenants (D56), read with the session variables it checks (D57) | `readback`, `errors` |
 | `pin.py` | `SchemaPin` — the digest a scenario's pin records, its projection, and what moved (§8) | — |
 | `pin_file.py` | `<name>.pin.json` beside a scenario: where it lives, read and written (§8) | the file system |
 | `scenario.py` | `Scenario`, `TableSpec`, `ScenarioManager` — a run, checked, executed, applied, reset or pinned | — |
@@ -285,7 +285,8 @@ scenario's — a run table narrowed to the rows outside its own range; reading a
 table's rows (D36), every one or, with the `WHERE` as `<where>`, those `where:` names,
 selecting its `pk_*` and only the columns asked for; learning keys; setting a
 hierarchy's paths from them (below); and, for `semis coverage` (D56), counting a view's
-rows, and its tenants when it exposes the tenant column, in a read-only transaction:
+rows, and its tenants when it exposes the tenant column, in a read-only transaction,
+once it has set the session variables `semis.yaml`'s `coverage:` names (D57):
 
 ```sql
 SELECT pg_advisory_xact_lock(%s, %s)
@@ -300,6 +301,8 @@ DELETE FROM <schema>.<table> AS t USING <parent_schema>.<parent> AS p
 SELECT count(*) FROM <schema>.<table>
 
 SELECT count(*), count(DISTINCT <tenant_column>) FROM <schema>.<view>
+
+SELECT set_config(%s, %s, true)
 
 LOCK TABLE <tables> IN SHARE MODE
 
@@ -697,6 +700,7 @@ SemisError(ConfiturError-shaped: message, error_code, exit_code, resolution_hint
 ├── ResetScopeError    a reset of a table with no uuid natural id to find its rows by
 ├── UnreachableDatabaseError  a database URL nothing answers at, or a malformed one — named by host, port and database
 ├── SchemaNotBuiltError  a database that holds no table the run reads: its schema is not built there
+├── ViewReadError      a view `coverage` counts that the database refuses to read, named with PostgreSQL's reason
 └── ProjectError       a semis.yaml that does not load, or a command with no project
 ```
 
@@ -819,6 +823,8 @@ semis does not:
 | D54 | semis names a table `schema.name`, through `schema.qualified(ref)`, whichever source read it: confiture's `ObjectRef.display` drops `public.` from a table its DDL reader read and keeps it from a live database, so keying by it made a schema whose DDL leaves its tables unqualified unseedable. A table outside `public` is named as before. The inconsistency is reported upstream | 2026-11-04 |
 | D55 | A column with a default is left to PostgreSQL unless the table's `fill: [..]` names it, NOT NULL or not; then semis draws it as any other column, from its CHECK's list when it has one, and a copy may read it. `fill: all` draws no default: `all` is every column the run would otherwise write `NULL`. A NOT NULL column with no default is refused under `fill:`, being always drawn | fraiseql/semis#13, 2026-11-05 |
 | D56 | `semis coverage SCENARIO` reports, of one database, every view, materialized view and TVIEW of the model that reads a table the scenario writes, by confiture's `view_reads` (through views, matviews, TVIEWs and a TVIEW's `function_reads`, not a routine's body, which the report says), with `count(*)` and, when `view_columns` includes `tenancy:`'s column, `count(DISTINCT <column>)`, in a read-only transaction rolled back. Exit 0 by default, since some scenarios hold one tenant on purpose; `--fail-on-single-tenant` exits 1 when a multi-tenant view holds fewer than two. No allowlist in `semis.yaml`. A view whose columns confiture cannot name is its `SchemaError`, unwrapped. Floor `fraiseql-confiture>=1.47` | fraiseql/semis#9, owner, 2026-11-08 |
+| D57 | `semis coverage` reads as the identity `semis.yaml`'s `coverage: session_variables:` names: before any count, in the same read-only transaction, one `SELECT set_config(%s, %s, true)` per variable, sorted, name and value as parameters, rolled back with the transaction. Names are custom settings only, `prefix.name` with identifier-like parts, so no built-in setting (`role`, `search_path`, `transaction_read_only`) is ever handed to PostgreSQL; `fraiseql.*` names are allowed; values are strings. Project level only: no flag, no per-scenario override; no other command sets them. The table report's first line names them, each value a PostgreSQL string literal (`app.x=''`, a `'` doubled) so an empty value or one holding `, ` reads one way, on stderr with `--format json`. Configuration, not pinned. The test role, a superuser owning its tables, skips row-level security, so the feature is described as session variables, not RLS; reading as several identities, `SET ROLE`, and deriving the variables from fraiseql's config are out of scope | consumer, owner, 2026-11-08 |
+| D58 | A view `semis coverage` counts that the database refuses to read, any error the server reports while counting it (a materialized view never refreshed, a setting read without `missing_ok` while unset, a privilege the role lacks), is `ViewReadError` (`SEMIS_DATABASE_003`), raised in `readback`, naming the view's kind and name and PostgreSQL's primary message; its hint is PostgreSQL's when it gives one, `coverage: session_variables:` for an unrecognized setting, otherwise to read the view as the same role. The whole report is refused, as for a `SchemaError`: no partial report. A connection that drops (no SQLSTATE) is not the view's and propagates. | review, 2026-11-09 |
 
 ### On the UUID encoding's own arithmetic (D6)
 

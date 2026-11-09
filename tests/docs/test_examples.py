@@ -1263,7 +1263,15 @@ _VIEW_COUNTS = (
 @check(_page("reference/cli.md"), "view                    rows  tenants")
 def _coverage_report(block: Block, _context: Context) -> None:
     """The lines semis coverage prints, from the counts the page describes."""
-    assert _coverage_lines(_VIEW_COUNTS, "orders") == block.text.splitlines()
+    assert _coverage_lines(_VIEW_COUNTS, "orders", variables={}) == block.text.splitlines()
+
+
+@check(_page("reference/cli.md"), "read with app.agent_role='manager'")
+def _coverage_read_with(block: Block, _context: Context) -> None:
+    """The report, read with the session variable the page names."""
+    counts = (ViewCount("shop.v_customer", "view", 12, 2), _VIEW_COUNTS[3])
+    variables = {"app.agent_role": "manager"}
+    assert _coverage_lines(counts, "orders", variables=variables) == block.text.splitlines()
 
 
 @check(_page("reference/cli.md"), "[")
@@ -1284,6 +1292,15 @@ def _coverage_in_ci(block: Block, context: Context) -> None:
 
 
 _MULTILINGUAL = _page("guides/multilingual.md")
+
+
+@check(_page("guides/tenants.md"), "coverage:")
+def _scoped_views(block: Block, context: Context) -> None:
+    """The block loads into the variable the report reads with."""
+    (context.tmp_path / "schema.sql").write_text(TRINITY)
+    config = context.tmp_path / "semis.yaml"
+    config.write_text(f"schema: {{ddl: schema.sql}}\ntable_codes: {{}}\n{block.text}\n")
+    assert Project.load(config).coverage_variables == {"app.agent_role": "manager"}
 
 
 @check(_MULTILINGUAL, "CREATE SCHEMA catalog;")
@@ -1530,6 +1547,18 @@ def _tenancy_rule(block: Block, context: Context) -> None:
         exclude=frozenset({"app.tb_audit_log"}),
         include={"app.tb_ledger": "owner_tenant"},
     )
+
+
+@check(_page("reference/semis-yaml.md"), "coverage:")
+def _coverage_variables(block: Block, context: Context) -> None:
+    """The block loads into the variables the report reads with."""
+    (context.tmp_path / "schema.sql").write_text(TRINITY)
+    config = context.tmp_path / "semis.yaml"
+    config.write_text(f"schema: {{ddl: schema.sql}}\ntable_codes: {{}}\n{block.text}\n")
+    assert Project.load(config).coverage_variables == {
+        "app.agent_role": "manager",
+        "app.locale": "fr",
+    }
 
 
 @check("README.md", "tenancy:                           # in semis.yaml")

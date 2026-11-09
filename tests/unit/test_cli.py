@@ -13,6 +13,7 @@ from fraiseql_semis.cli import app, main
 from fraiseql_semis.cli.main import NOT_FOLLOWED, _coverage_lines, _masked, _where
 from fraiseql_semis.errors import UnreachableDatabaseError
 from fraiseql_semis.readback import checked_url
+from fraiseql_semis.view_coverage import ViewCount
 from tests.ddl import TRANSLATED, TRANSLATED_CODES, TRINITY
 
 runner = CliRunner()
@@ -962,7 +963,34 @@ def test_validate_prints_no_coverage_line_for_a_table_missing_no_label(tmp_path:
 
 
 def test_coverage_says_when_no_view_reads_the_scenarios_tables() -> None:
-    assert _coverage_lines((), "views") == [
+    assert _coverage_lines((), "views", variables={}) == [
         "no view reads a table scenario views writes",
         NOT_FOLLOWED,
+    ]
+
+
+def test_coverage_says_what_it_read_with_even_when_no_view_is_reached() -> None:
+    assert _coverage_lines((), "views", variables={"app.x": "", "app.a": "1"}) == [
+        "read with app.a='1', app.x=''",
+        "no view reads a table scenario views writes",
+        NOT_FOLLOWED,
+    ]
+
+
+def test_each_value_read_with_is_a_string_literal_so_the_line_reads_one_way() -> None:
+    variables = {"app.note": "a, b=c", "app.owner": "it's"}
+    assert _coverage_lines((), "views", variables=variables)[0] == (
+        "read with app.note='a, b=c', app.owner='it''s'"
+    )
+
+
+def test_a_count_wider_than_its_heading_keeps_the_columns_aligned() -> None:
+    counts = (
+        ViewCount("s.v_big", "view", 123456, 2),
+        ViewCount("s.v_small", "view", 3, None),
+    )
+    assert _coverage_lines(counts, "views", variables={})[:3] == [
+        "view         rows  tenants",
+        "s.v_big    123456        2",
+        "s.v_small       3        -",
     ]

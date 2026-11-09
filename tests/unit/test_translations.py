@@ -611,3 +611,20 @@ def test_coverage_without_locales_is_refused(tmp_path: Path) -> None:
             HEADER
             + "coverage: {en-GB: 0.5}\ntables:\n  - name: catalog.tb_continent\n    count: 2\n",
         )
+
+
+def test_session_variables_under_a_scenarios_coverage_point_at_semis_yaml(tmp_path: Path) -> None:
+    with pytest.raises(ScenarioError) as refused:
+        _load(
+            tmp_path,
+            COVERED
+            + "coverage:\n  session_variables:\n    app.agent_role: manager\n"
+            + TRANSLATED_TABLE,
+        )
+    assert refused.value.message == (
+        "scenario shop: coverage: maps a locale to a fraction; session_variables, what "
+        "semis coverage reads with, goes under semis.yaml's coverage:"
+    )
+    assert refused.value.resolution_hint == (
+        "Move it to semis.yaml: coverage: {session_variables: {app.agent_role: manager}}."
+    )

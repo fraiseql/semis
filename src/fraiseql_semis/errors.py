@@ -87,6 +87,14 @@ class SchemaNotBuiltError(SemisError):
     error_code = "SEMIS_DATABASE_002"
 
 
+class ViewReadError(SemisError):
+    """A view the database holds but refuses to read: a materialized view never
+    refreshed, a setting it reads unset, a privilege the role lacks. Names the view and
+    PostgreSQL's reason."""
+
+    error_code = "SEMIS_DATABASE_003"
+
+
 class ProjectError(SemisError):
     """A project file that does not load, or a command with no project to read."""
 
@@ -129,13 +137,19 @@ class IncomparablePinError(PinError):
 
 
 def refuse_unknown(
-    where: str, data: Mapping[object, object], known: Set[str], *, error: type[SemisError]
+    where: str,
+    data: Mapping[object, object],
+    known: Set[str],
+    *,
+    error: type[SemisError],
+    hint: str | None = None,
 ) -> None:
     """Refuse *data*, a mapping read at *where*, with *error* when it holds a key not in
-    *known*, naming every such key and listing the known ones."""
+    *known*, naming every such key; the *hint*, or the known keys listed. A *where*
+    that ends with its block's colon, ``semis.yaml: tenancy:``, is not given another."""
     unknown = sorted(str(key) for key in set(data) - known)
     if unknown:
         raise error(
-            f"{where}: unknown key {', '.join(unknown)}",
-            resolution_hint=f"Known keys: {', '.join(sorted(known))}.",
+            f"{where.removesuffix(':')}: unknown key {', '.join(unknown)}",
+            resolution_hint=hint or f"Known keys: {', '.join(sorted(known))}.",
         )

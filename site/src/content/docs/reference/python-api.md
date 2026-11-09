@@ -95,7 +95,7 @@ ScenarioManager.execute(scenario, out_dir, *, connection=None, format=None, no_p
 ScenarioManager.apply(scenario, out_dir=None, *, connection, format=None, no_pin=False)
 ScenarioManager.rehearse(scenario, *, connection=None, format=None, no_pin=False)
 ScenarioManager.reset(scenario, *, connection)
-ScenarioManager.coverage(scenario, *, connection)
+ScenarioManager.coverage(scenario, *, connection, session_variables=None)
 ScenarioManager.pin(scenario, path, *, check=False, connection=None)
 ScenarioManager.check(scenario, *, no_pin=False)
 ScenarioManager.validate(scenario, *, schema_dir, max_level=3, connection=None, catalog_schema=None, format=None, no_pin=False)
@@ -139,7 +139,13 @@ holds.
   distinct values its rows hold in the project's tenant column, `None` for a view that
   does not output it; `single_tenant` is true when a view that does holds fewer than two,
   and `mark` is what the report prints beside it. A view that reaches a table only
-  through a routine's body is not found.
+  through a routine's body is not found. `session_variables`, a mapping of custom
+  settings, `prefix.name`, to string values, as `Project.coverage_variables` holds
+  `semis.yaml`'s [`coverage:`](/reference/semis-yaml/#coverage), are set first with
+  `set_config(name, value, true)`, until the caller's transaction ends, so a view
+  scoped by one counts the rows that identity sees; a name or a value `semis.yaml`
+  would refuse is refused with `ProjectError`, before any is set. A view the database
+  refuses to read is refused with `ViewReadError`, naming it and PostgreSQL's reason.
 - `pin` takes the scenario's schema pin from this schema into `<name>.pin.json` beside
   the scenario file at `path`, as `semis pin` does, and returns a `PinChange`: the `path`,
   the schema's `pin`, the `previous` one the file kept, what `changes` moved between
@@ -206,7 +212,9 @@ Project.manager(*, database_url=None)
 
 `semis.yaml` loads into a `Project`: its table codes, its schema source, its scenarios
 directory, its providers and its staging schema. `Project.manager` reads the schema and
-returns a `ScenarioManager` with the project's providers. A tool that already holds a
+returns a `ScenarioManager` with the project's providers. `Project.coverage_variables`
+is the mapping `coverage: session_variables:` names, empty without one, which
+`semis coverage` passes to `ScenarioManager.coverage`. A tool that already holds a
 schema builds a `Project` directly, with no file.
 
 ## Providers

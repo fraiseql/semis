@@ -1,7 +1,8 @@
 """readback.learn's refusals, which it makes before it reaches the database."""
 
-from typing import Any
+from typing import Any, cast
 
+import psycopg
 import pytest
 
 from fraiseql_semis import readback
@@ -170,3 +171,19 @@ def test_rows_named_by_values_need_the_column_that_names_them() -> None:
     keys = SchemaFacts.from_source(ddl, table_codes=TableCodes({})).keys_for("s.tb_unit")
     with pytest.raises(ValueError, match="need the column that names them"):
         readback.existing_rows(_Unreachable(), keys, by=None, values=["x"], natural_id=None)
+
+
+class _Dropped(_Unreachable):
+    """A connection lost mid-read: psycopg's error carries no SQLSTATE."""
+
+    def execute(self, *_: Any) -> Any:
+        raise psycopg.OperationalError("server closed the connection unexpectedly")
+
+
+def test_a_connection_lost_while_counting_a_view_is_not_the_views_refusal() -> None:
+    facts = SchemaFacts.from_source(
+        "CREATE SCHEMA s; CREATE TABLE s.tb_a (id INT); CREATE VIEW s.v_a AS SELECT id FROM s.tb_a;",
+        table_codes=TableCodes({}),
+    )
+    with pytest.raises(psycopg.OperationalError, match="closed the connection"):
+        readback.count_view(cast("Any", _Dropped()), facts.views()[0], None)

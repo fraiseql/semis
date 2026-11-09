@@ -28,6 +28,7 @@ from fraiseql_semis.errors import (
     SchemaNotBuiltError,
     SemisError,
     UnreachableDatabaseError,
+    ViewReadError,
 )
 from fraiseql_semis.faker_provider import (
     TEXT_TYPES,
@@ -109,6 +110,7 @@ __all__ = [
     "UnreachableDatabaseError",
     "Validation",
     "ViewCount",
+    "ViewReadError",
     "Violation",
     "catalogue",
     "check_row",

@@ -141,6 +141,38 @@ configuration, not a schema fact, and is not pinned. A block that is not a mappi
 lacks `column:`, or names a table without its schema is refused, as is a table under
 both `include:` and `exclude:`.
 
+## `coverage:`
+
+What [`semis coverage`](/reference/cli/#semis-coverage) reads as. A view that scopes its
+rows by a session variable, `current_setting('app.agent_role', true)`, shows nothing
+while the variable is unset; fraiseql sets such variables per request, from the
+identity it serves. Named here, they are set before the report counts, so each view
+shows the rows a request of that identity would see. This is the project's `coverage:`;
+a scenario's [`coverage:`](/reference/scenario-file/) is another key, a locale's share
+of translated labels, and each file refuses the other's, naming where it goes.
+
+```yaml
+coverage:
+  session_variables:
+    app.agent_role: manager
+    app.locale: fr
+```
+
+| Key | Takes | Default |
+|---|---|---|
+| `session_variables` | a mapping of a custom setting, `prefix.name`, to its value, a string | none: nothing is set, and a view scoped by an unset variable shows no rows |
+
+Each is set with `set_config(name, value, true)` in the report's read-only transaction,
+which is rolled back: nothing persists, and no other command sets them. A name without
+a dot, a built-in setting such as `role` or `search_path`, is refused, as is a name
+whose parts are not identifiers, and a value that is not a string: quote `'1'` and
+`'on'`, which YAML reads unquoted as a number and a boolean. An empty string is a value.
+Who the report reads as is configuration, not a schema fact, and is not pinned.
+
+The variables reach a row-level security policy too, but only one that applies to the
+role `semis coverage` connects as: a table's owner skips its own table's policies unless
+the table forces them, and a superuser skips them all.
+
 ## From Python
 
 `semis.yaml` loads into `fraiseql_semis.Project`, and a tool that drives semis from Python

@@ -1,6 +1,6 @@
 """``semis coverage``'s reads: each view's rows and tenants, in a read-only transaction."""
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import LiteralString
 
@@ -10,7 +10,7 @@ from psycopg import sql
 
 from fraiseql_semis import ScenarioManager, readback
 from fraiseql_semis.codes import TableCodes
-from fraiseql_semis.errors import SchemaNotBuiltError
+from fraiseql_semis.errors import ProjectError, SchemaNotBuiltError, ViewReadError
 from fraiseql_semis.schema import ObjectRef, SchemaFacts
 from fraiseql_semis.tenancy import TenancyRule
 from fraiseql_semis.view_coverage import ViewCount
@@ -61,6 +61,56 @@ def test_a_view_the_database_lacks_is_refused(database_url: str) -> None:
         pytest.raises(SchemaNotBuiltError, match=r"holds no semis_views\.v Item"),
     ):
         readback.count_view(connection, _view("v Item"), None)
+
+
+# Views PostgreSQL refuses to read: a materialized view never refreshed, and a view
+# reading a setting without missing_ok while it is unset, and one that raises as it is read.
+UNREADABLE = f"""
+CREATE MATERIALIZED VIEW {SCHEMA}.mv_unfilled AS SELECT id FROM {SCHEMA}."tb Item" WITH NO DATA;
+CREATE VIEW {SCHEMA}.v_strict AS
+    SELECT id FROM {SCHEMA}."tb Item" WHERE current_setting('app.tenant') <> '';
+CREATE VIEW {SCHEMA}.v_broken AS SELECT id FROM {SCHEMA}."tb Item" WHERE 1 / (pk_item - pk_item) = 0;
+"""
+
+
+def _unreadable(name: str) -> ObjectRef:
+    facts = SchemaFacts.from_source(DDL + UNREADABLE, table_codes=TableCodes({}))
+    return next(ref for ref in facts.views() if ref.name == name)
+
+
+@pytest.mark.parametrize(
+    ("name", "said", "hint"),
+    [
+        (
+            "mv_unfilled",
+            r'matview semis_views\.mv_unfilled cannot be read: materialized view "mv_unfilled" '
+            r"has not been populated",
+            "REFRESH MATERIALIZED VIEW",
+        ),
+        (
+            "v_strict",
+            r'view semis_views\.v_strict cannot be read: unrecognized configuration parameter "app'
+            r'\.tenant"',
+            "coverage: session_variables:",
+        ),
+        (
+            "v_broken",
+            r"view semis_views\.v_broken cannot be read: division by zero",
+            "Read the view with psql",
+        ),
+    ],
+)
+def test_a_view_postgresql_refuses_to_read_is_refused_naming_it(
+    database: str, name: str, said: str, hint: str
+) -> None:
+    with psycopg.connect(database, autocommit=True) as admin:
+        admin.execute(UNREADABLE)
+    with (
+        readback.transaction(database, commit=False, read_only=True) as connection,
+        pytest.raises(ViewReadError, match=said) as refused,
+    ):
+        readback.count_view(connection, _unreadable(name), None)
+    assert hint in str(refused.value.resolution_hint)
 
 
 def test_a_read_only_transaction_refuses_a_write(database: str) -> None:
@@ -132,7 +182,11 @@ def app(database_url: str) -> Iterator[psycopg.Connection]:
 
 
 def _coverage(
-    connection: psycopg.Connection, tmp_path: Path, ddl: str | SchemaFacts, orgs: int
+    connection: psycopg.Connection,
+    tmp_path: Path,
+    ddl: str | SchemaFacts,
+    orgs: int,
+    session_variables: Mapping[str, str] | None = None,
 ) -> tuple[ViewCount, ...]:
     facts = ddl if isinstance(ddl, SchemaFacts) else _from_ddl(ddl)
     manager = ScenarioManager(facts, tenancy=RULE)
@@ -140,7 +194,7 @@ def _coverage(
     path.write_text(_scenario(orgs))
     scenario = manager.load(path)
     manager.apply(scenario, None, connection=connection)
-    return manager.coverage(scenario, connection=connection)
+    return manager.coverage(scenario, connection=connection, session_variables=session_variables)
 
 
 def _from_ddl(ddl: str) -> SchemaFacts:
@@ -164,6 +218,51 @@ def test_one_tenant_is_counted_as_one(app: psycopg.Connection, tmp_path: Path) -
         f"{APP}.v_item",
         f"{APP}.v_item_org",
     ]
+
+
+# A view scoped as a request's identity scopes it: by a session variable, read through one
+# filter function, and empty while the variable is unset.
+SCOPED = f"""
+CREATE FUNCTION {APP}.fn_sees_all() RETURNS boolean LANGUAGE sql STABLE
+    AS $$ SELECT current_setting('app.agent_role', true) = 'manager' $$;
+CREATE VIEW {APP}.v_org_scoped AS SELECT id, name FROM {APP}.tb_org WHERE {APP}.fn_sees_all();
+"""
+MANAGER = {"app.agent_role": "manager"}
+
+
+def test_a_view_scoped_by_a_session_variable_shows_no_rows_while_it_is_unset(
+    app: psycopg.Connection, tmp_path: Path
+) -> None:
+    app.execute(SCOPED)
+    counts = _coverage(app, tmp_path, APP_DDL + SCOPED, orgs=2)
+    assert ViewCount(f"{APP}.v_org_scoped", "view", 0, None) in counts
+
+
+def test_a_view_scoped_by_a_session_variable_shows_every_row_once_it_is_set(
+    app: psycopg.Connection, tmp_path: Path
+) -> None:
+    app.execute(SCOPED)
+    counts = _coverage(app, tmp_path, APP_DDL + SCOPED, orgs=2, session_variables=MANAGER)
+    assert ViewCount(f"{APP}.v_org_scoped", "view", 2, None) in counts
+
+
+def test_the_session_variables_end_with_the_callers_transaction(
+    app: psycopg.Connection, tmp_path: Path
+) -> None:
+    app.execute(SCOPED)
+    _coverage(app, tmp_path, APP_DDL + SCOPED, orgs=2, session_variables=MANAGER)
+    assert app.execute("SELECT current_setting('app.agent_role', true)").fetchone() == ("manager",)
+    app.rollback()
+    assert app.execute("SELECT current_setting('app.agent_role', true)").fetchone() != ("manager",)
+
+
+def test_a_session_variable_semis_would_refuse_is_never_set(
+    app: psycopg.Connection, tmp_path: Path
+) -> None:
+    with pytest.raises(ProjectError, match="session_variables: role is not a custom setting"):
+        _coverage(app, tmp_path, APP_DDL, orgs=2, session_variables={"role": "x"})
+    app.rollback()
+    assert app.execute("SELECT current_setting('role')").fetchone() == ("none",)
 
 
 TVIEW = f"CREATE TABLE {APP}.tv_item AS SELECT pk_item, id, tenant_id, name FROM {APP}.tb_item;"

@@ -516,6 +516,14 @@ def _coverage(scenario: str, block: object) -> dict[str, Fraction]:
             f"scenario {scenario}: coverage: maps a locale to a fraction, e.g. {{en-GB: 0.8}}",
             resolution_hint="Write coverage: {<locale code>: <fraction from 0 to 1>}.",
         )
+    if "session_variables" in block:
+        raise ScenarioError(
+            f"scenario {scenario}: coverage: maps a locale to a fraction; session_variables, "
+            "what semis coverage reads with, goes under semis.yaml's coverage:",
+            resolution_hint=(
+                "Move it to semis.yaml: coverage: {session_variables: {app.agent_role: manager}}."
+            ),
+        )
     return {str(code): _fraction(scenario, str(code), value) for code, value in block.items()}
 
 

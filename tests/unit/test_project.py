@@ -121,7 +121,7 @@ def test_facts_given_in_python_are_used_as_they_are() -> None:
         ("schema: {ddl: a.sql}\ntable_codes: missing.yaml\n", "missing.yaml, which does not"),
         ("schema: {ddl: a.sql}\ntable_codes: {}\nscenarios: 3\n", "scenarios: is a string"),
         ("schema: {ddl: a.sql}\ntable_codes: {}\nprep_seed: x\n", "prep_seed: is a mapping"),
-        ("schema: {ddl: a.sql}\ntable_codes: {}\nprep_seed: {x: 1}\n", "prep_seed:: unknown key x"),
+        ("schema: {ddl: a.sql}\ntable_codes: {}\nprep_seed: {x: 1}\n", "prep_seed: unknown key x"),
         (
             "schema: {ddl: a.sql}\ntable_codes: {}\nprep_seed: {prep_seed_schema: 3}\n",
             "prep_seed_schema: is a string",
@@ -442,7 +442,7 @@ def test_no_translations_block_gives_the_defaults(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("block", "said"),
     [
-        ("translations:\n  labels: name\n", "translations:: unknown key labels"),
+        ("translations:\n  labels: name\n", "translations: unknown key labels"),
         ("translations:\n  label_column: 3\n", "translations: label_column: is a column name"),
         (
             "translations: [label]\n",
@@ -509,7 +509,7 @@ def test_no_tenancy_block_gives_no_rule(tmp_path: Path) -> None:
         ("tenancy: tenant_id\n", "tenancy: maps column, table, exclude and include"),
         ("tenancy:\n  table: catalog.tb_continent\n", "tenancy: has no column:"),
         ("tenancy:\n  column: 3\n", "tenancy: column: is a column name"),
-        ("tenancy:\n  column: t\n  tenant: x\n", "tenancy:: unknown key tenant"),
+        ("tenancy:\n  column: t\n  tenant: x\n", "tenancy: unknown key tenant"),
         ("tenancy:\n  column: t\n  table: tb_continent\n", "tenancy: table: is schema.table"),
         ("tenancy:\n  column: t\n  exclude: catalog.tb_country\n", "tenancy: exclude: lists"),
         ("tenancy:\n  column: t\n  exclude: [tb_country]\n", "tenancy: exclude: lists"),
@@ -524,3 +524,102 @@ def test_no_tenancy_block_gives_no_rule(tmp_path: Path) -> None:
 def test_a_malformed_tenancy_block_is_refused(tmp_path: Path, block: str, said: str) -> None:
     with pytest.raises(ProjectError, match=re.escape(said)):
         Project.load(_project(tmp_path, SEMIS_YAML + block))
+
+
+def test_a_coverage_block_names_the_session_variables_the_report_reads_with(
+    tmp_path: Path,
+) -> None:
+    block = (
+        "coverage:\n  session_variables:\n    app.agent_role: manager\n    fraiseql.tenant_id: ''\n"
+    )
+    project = Project.load(_project(tmp_path, SEMIS_YAML + block))
+    assert project.coverage_variables == {"app.agent_role": "manager", "fraiseql.tenant_id": ""}
+
+
+def test_no_coverage_block_sets_no_variable(tmp_path: Path) -> None:
+    assert Project.load(_project(tmp_path)).coverage_variables == {}
+
+
+@pytest.mark.parametrize(
+    ("block", "said"),
+    [
+        ("coverage: app.agent_role\n", "coverage: maps session_variables"),
+        ("coverage:\n  variables: {}\n", "coverage: unknown key variables"),
+        ("coverage:\n  session_variables: [app.x]\n", "coverage: session_variables: maps"),
+        (
+            "coverage:\n  session_variables:\n    role: admin\n",
+            "coverage: session_variables: role is not a custom setting",
+        ),
+        (
+            "coverage:\n  session_variables:\n    search_path: x\n",
+            "coverage: session_variables: search_path is not a custom setting",
+        ),
+        (
+            "coverage:\n  session_variables:\n    app.agent-role: x\n",
+            "coverage: session_variables: app.agent-role is not a setting name",
+        ),
+        (
+            "coverage:\n  session_variables:\n    app.: x\n",
+            "coverage: session_variables: app. is not a setting name",
+        ),
+        (
+            "coverage:\n  session_variables:\n    1app.x: x\n",
+            "coverage: session_variables: 1app.x is not a setting name",
+        ),
+        (
+            "coverage:\n  session_variables:\n    app.on: on\n",
+            "coverage: session_variables: app.on is True, not a string",
+        ),
+        (
+            "coverage:\n  session_variables:\n    app.level: 1\n",
+            "coverage: session_variables: app.level is 1, not a string",
+        ),
+        (
+            "coverage:\n  session_variables:\n    3: x\n",
+            "coverage: session_variables: 3 is not a setting name",
+        ),
+    ],
+    ids=[
+        "not-a-mapping",
+        "unknown-key",
+        "variables-not-a-mapping",
+        "no-dot",
+        "built-in",
+        "hyphen",
+        "empty-part",
+        "digit-first",
+        "yaml-boolean",
+        "integer",
+        "integer-name",
+    ],
+)
+def test_a_malformed_coverage_block_is_refused(tmp_path: Path, block: str, said: str) -> None:
+    path = _project(tmp_path, SEMIS_YAML + block)
+    with pytest.raises(ProjectError, match=rf"^{re.escape(str(path))}: {re.escape(said)}"):
+        Project.load(path)
+
+
+@pytest.mark.parametrize(
+    ("block", "hint"),
+    [
+        ("coverage:\n  session_variables:\n    role: x\n", "prefix.name"),
+        ("coverage:\n  session_variables:\n    app.level: 1\n", "Quote the value"),
+    ],
+)
+def test_a_refused_session_variable_says_how_to_write_it(
+    tmp_path: Path, block: str, hint: str
+) -> None:
+    with pytest.raises(ProjectError) as refused:
+        Project.load(_project(tmp_path, SEMIS_YAML + block))
+    assert hint in str(refused.value.resolution_hint)
+
+
+@pytest.mark.parametrize("block", ["coverage:\n  en-GB: 0.8\n", "coverage:\n  app.x: y\n"])
+def test_semis_yamls_coverage_says_which_coverage_it_is(tmp_path: Path, block: str) -> None:
+    with pytest.raises(ProjectError) as refused:
+        Project.load(_project(tmp_path, SEMIS_YAML + block))
+    assert refused.value.resolution_hint == (
+        "semis.yaml's coverage: takes session_variables:, the settings semis coverage "
+        "reads with: coverage: {session_variables: {app.agent_role: manager}}. A locale's "
+        "share of labels is a scenario's coverage:."
+    )

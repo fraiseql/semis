@@ -31,6 +31,15 @@ CREATE VIEW {SCHEMA}.v_item AS SELECT id, tenant_id, name FROM {SCHEMA}.tb_item;
 CREATE VIEW {SCHEMA}.v_org AS SELECT id, name FROM {SCHEMA}.tb_org;
 CREATE MATERIALIZED VIEW {SCHEMA}.mv_org AS SELECT id FROM {SCHEMA}.tb_org;
 """
+# A view scoped as a request's identity scopes it: by a session variable, read through one
+# filter function, and empty while the variable is unset.
+SCOPED = f"""
+CREATE FUNCTION {SCHEMA}.fn_sees_all() RETURNS boolean LANGUAGE sql STABLE
+    AS $$ SELECT current_setting('app.agent_role', true) = 'manager' $$;
+CREATE VIEW {SCHEMA}.v_org_scoped AS
+    SELECT id, name FROM {SCHEMA}.tb_org WHERE {SCHEMA}.fn_sees_all();
+"""
+AS_MANAGER = "coverage:\n  session_variables:\n    app.agent_role: manager\n    app.locale: fr\n"
 CODES = f"""\
 table_codes:
   {SCHEMA}.tb_org: 0x31323334
@@ -190,11 +199,95 @@ def test_the_fail_flag_without_tenancy_is_refused(database: str, tmp_path: Path)
     assert "semis.yaml names no tenancy: column" in result.stderr
 
 
+@pytest.mark.parametrize(
+    ("kind", "create"),
+    [
+        ("view", "CREATE VIEW {name} AS"),
+        ("matview", "CREATE MATERIALIZED VIEW {name} AS"),
+        ("tview", "CREATE TABLE {name} AS"),
+    ],
+)
 def test_a_view_whose_columns_cannot_be_named_is_refused_naming_it(
-    database: str, tmp_path: Path
+    database: str, tmp_path: Path, kind: str, create: str
 ) -> None:
-    broken = DDL + f"CREATE VIEW {SCHEMA}.v_star AS SELECT * FROM {SCHEMA}.tb_item, elsewhere;"
+    name = f"{SCHEMA}.{'tv' if kind == 'tview' else 'v'}_star"
+    broken = DDL + create.format(name=name) + f" SELECT * FROM {SCHEMA}.tb_item, elsewhere;"
     result = _semis(tmp_path, database, "coverage", ddl=broken)
     assert result.exit_code == 4
-    assert f"view {SCHEMA}.v_star's columns cannot be named" in result.stderr
+    assert f"{kind} {name}'s columns cannot be named" in result.stderr
+    assert "Traceback" not in result.output
+
+
+UNFILLED = (
+    f"CREATE MATERIALIZED VIEW {SCHEMA}.mv_unfilled AS SELECT id FROM {SCHEMA}.tb_org WITH NO DATA;"
+)
+
+
+def test_a_view_postgresql_refuses_to_read_is_refused_naming_it(
+    database: str, tmp_path: Path
+) -> None:
+    with psycopg.connect(database, autocommit=True) as admin:
+        admin.execute(UNFILLED)
+    result = _semis(tmp_path, database, "coverage", ddl=DDL + UNFILLED)
+    assert result.exit_code == 1
+    assert result.stderr.splitlines() == [
+        f'matview {SCHEMA}.mv_unfilled cannot be read: materialized view "mv_unfilled" has not '
+        "been populated",
+        "Hint: Use the REFRESH MATERIALIZED VIEW command.",
+    ]
+    assert "Traceback" not in result.output
+
+
+@pytest.fixture
+def scoped(database: str) -> str:
+    with psycopg.connect(database, autocommit=True) as admin:
+        admin.execute(SCOPED)
+    return database
+
+
+def _scoped_rows(result: Result) -> str:
+    return next(line for line in result.stdout.splitlines() if "v_org_scoped" in line)
+
+
+def test_a_view_scoped_by_an_unset_session_variable_shows_no_rows(
+    scoped: str, tmp_path: Path
+) -> None:
+    _applied(tmp_path, scoped)
+    result = _semis(tmp_path, scoped, "coverage", ddl=DDL + SCOPED)
+    assert result.exit_code == 0, result.output
+    assert _scoped_rows(result) == f"{SCHEMA}.v_org_scoped     0        -  no rows"
+    assert result.stdout.splitlines()[0].startswith("view ")
+
+
+def test_coverage_reads_with_the_projects_session_variables(scoped: str, tmp_path: Path) -> None:
+    _applied(tmp_path, scoped)
+    project = FROM_DDL + CODES + TENANCY + AS_MANAGER
+    result = _semis(tmp_path, scoped, "coverage", project=project, ddl=DDL + SCOPED)
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[0] == "read with app.agent_role='manager', app.locale='fr'"
+    assert _scoped_rows(result) == f"{SCHEMA}.v_org_scoped     2        -"
+
+
+def test_coverage_as_json_says_what_it_read_with_on_stderr(scoped: str, tmp_path: Path) -> None:
+    _applied(tmp_path, scoped)
+    project = FROM_DDL + CODES + TENANCY + AS_MANAGER
+    result = _semis(
+        tmp_path, scoped, "coverage", "--format", "json", project=project, ddl=DDL + SCOPED
+    )
+    assert result.exit_code == 0, result.output
+    rows = {view["view"]: view["rows"] for view in json.loads(result.stdout)}
+    assert rows[f"{SCHEMA}.v_org_scoped"] == 2
+    assert result.stderr.splitlines() == [
+        "read with app.agent_role='manager', app.locale='fr'",
+        NOT_FOLLOWED,
+    ]
+
+
+def test_a_built_in_setting_under_session_variables_is_refused(
+    database: str, tmp_path: Path
+) -> None:
+    project = FROM_DDL + CODES + "coverage:\n  session_variables:\n    role: admin\n"
+    result = _semis(tmp_path, database, "coverage", project=project)
+    assert result.exit_code == 1
+    assert "coverage: session_variables: role is not a custom setting" in result.stderr
     assert "Traceback" not in result.output

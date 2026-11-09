@@ -83,6 +83,10 @@ def test_every_translations_key_is_documented() -> None:
     assert _first_column("semis-yaml.md", "`translations:`") == project._TRANSLATION_KEYS
 
 
+def test_every_coverage_key_is_documented() -> None:
+    assert _first_column("semis-yaml.md", "`coverage:`") == project._COVERAGE_KEYS
+
+
 # The scenario file --------------------------------------------------------------------
 
 

@@ -6,6 +6,41 @@ All notable changes to fraiseql-semis are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-09
+
+### Added
+
+- **`coverage: session_variables:` in `semis.yaml`**: the session variables
+  `semis coverage` sets, with `set_config(name, value, true)` in its read-only
+  transaction, before it counts. A view that scopes its rows by
+  `current_setting('app.agent_role', true)` showed `no rows` over full tables; it now
+  shows the rows a request of that identity sees. Names are custom settings,
+  `prefix.name`; a built-in one (`role`, `search_path`), a malformed name and a value
+  that is not a string are refused at load. The table report's first line names them,
+  `read with app.agent_role='manager'`, each value quoted as a PostgreSQL string; with
+  `--format json`, that line goes to stderr. With none named, the report is 0.8.0's.
+  From Python, `ScenarioManager.coverage` takes `session_variables=`, and
+  `Project.coverage_variables` holds the project's.
+
+### Fixed
+
+- **A view the database refuses to read is a refusal, not a traceback.** `semis
+  coverage` ended with psycopg's traceback on a materialized view created `WITH NO
+  DATA` and never refreshed, or on a view reading a setting without `missing_ok` while
+  it is unset. It is now `ViewReadError` (`SEMIS_DATABASE_003`, exit 1), naming the
+  view and PostgreSQL's reason, with PostgreSQL's hint (`REFRESH MATERIALIZED VIEW`) or
+  one naming `coverage: session_variables:` for an unset setting.
+- **The two `coverage:` keys point at each other.** `session_variables:` under a
+  scenario's `coverage:` was refused as "not a fraction from 0 to 1"; it now says it
+  goes under `semis.yaml`'s `coverage:`. Any other key under `semis.yaml`'s `coverage:`,
+  a locale among them, is refused with a hint naming `session_variables:` and the
+  scenario's `coverage:`.
+- **An unknown key in a `semis.yaml` block is named after one colon**:
+  `semis.yaml: tenancy: unknown key tenant`, not `tenancy:: unknown key tenant`, in
+  `schema:`, `prep_seed:`, `translations:`, `tenancy:` and `coverage:`.
+- **`semis coverage`'s `rows` column widens to its largest count**: a view of more than
+  9999 rows pushed its line out of line with the others.
+
 ## [0.8.0] - 2026-11-08
 
 ### Added
@@ -507,7 +542,8 @@ The first release.
   prints, and requires fraiseql-confiture 1.27, whose `CONFIG_003` refusal of a
   `--database-url` no longer repeats the password either.
 
-[Unreleased]: https://github.com/fraiseql/semis/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/fraiseql/semis/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/fraiseql/semis/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/fraiseql/semis/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/fraiseql/semis/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/fraiseql/semis/compare/v0.7.1...v0.7.2

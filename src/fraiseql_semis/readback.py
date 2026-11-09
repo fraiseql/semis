@@ -3,7 +3,8 @@
 The one module that imports ``psycopg``, and the only SQL semis writes (D9): taking a
 scenario's lock, asking whether its rows are already applied, deleting them for a reset,
 reading the keys of rows a run did not write, learning keys, setting a hierarchy's
-paths from them, and counting a view's rows and tenants. Their identifiers come from the model, composed with
+paths from them, and counting a view's rows and tenants, once the session variables
+the count reads with are set. Their identifiers come from the model, composed with
 ``psycopg.sql.Identifier``, and their values are parameters.
 """
 
@@ -15,7 +16,12 @@ import psycopg
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 
-from fraiseql_semis.errors import ResolutionError, SchemaNotBuiltError, UnreachableDatabaseError
+from fraiseql_semis.errors import (
+    ResolutionError,
+    SchemaNotBuiltError,
+    UnreachableDatabaseError,
+    ViewReadError,
+)
 from fraiseql_semis.schema import Connection, ObjectRef, Reference, TableFacts, TableKeys, qualified
 
 SEMIS_LOCK_CLASS = 0x5E3115
@@ -31,6 +37,7 @@ _DELETE_THROUGH = sql.SQL(
 )
 _COUNT = sql.SQL("SELECT count(*) FROM {schema}.{table}")
 _COUNT_TENANTS = sql.SQL("SELECT count(*), count(DISTINCT {tenant}) FROM {schema}.{view}")
+_SET_CONFIG = sql.SQL("SELECT set_config(%s, %s, true)")
 _LOCK_SHARED = sql.SQL("LOCK TABLE {tables} IN SHARE MODE")
 _POINTING = sql.SQL(
     "SELECT count(*) FROM {schema}.{table} AS r WHERE EXISTS (SELECT FROM {target_schema}."
@@ -280,18 +287,26 @@ def count_view(
     connection: Connection, view: ObjectRef, tenant_column: str | None
 ) -> tuple[int, int | None]:
     """How many rows *view* holds, and how many distinct values its *tenant_column*: a
-    ``NULL`` is no tenant. ``None`` for the tenants when no column is given."""
+    ``NULL`` is no tenant. ``None`` for the tenants when no column is given. A view the
+    database refuses to read is a ``ViewReadError`` naming it."""
     if tenant_column is None:
-        with _built(view):
+        with _readable(view), _built(view):
             return count(connection, view), None
     query = _COUNT_TENANTS.format(
         tenant=sql.Identifier(tenant_column),
         schema=sql.Identifier(view.schema),
         view=sql.Identifier(view.name),
     )
-    with _built(view):
+    with _readable(view), _built(view):
         (rows, tenants) = connection.execute(query).fetchone()
     return rows, tenants
+
+
+def set_variables(connection: Connection, variables: Mapping[str, str]) -> None:
+    """Set each of *variables*, by name, until *connection*'s transaction ends: as
+    ``set_config(name, value, true)``, so a rollback leaves none set."""
+    for name in sorted(variables):
+        connection.execute(_SET_CONFIG, [name, variables[name]])
 
 
 def existing_keys(
@@ -400,6 +415,33 @@ def _built(table: ObjectRef) -> Iterator[None]:
         raise SchemaNotBuiltError(
             f"the database holds no {qualified(table)}",
             resolution_hint="Build the schema in this database, then apply the scenario.",
+        ) from error
+
+
+_UNSET_SETTING = "unrecognized configuration parameter"
+_SETTING_HINT = (
+    "Name the setting under coverage: session_variables: in semis.yaml, so semis coverage "
+    "sets it before it counts."
+)
+_READ_HINT = "Read the view with psql, as the role semis connects as, to see why."
+
+
+@contextmanager
+def _readable(view: ObjectRef) -> Iterator[None]:
+    """Refuse a read of *view* that the server refused, naming the view and the server's
+    reason: a materialized view never refreshed, a setting it reads unset, a privilege
+    the role lacks. A connection that drops is not the view's, and is not caught."""
+    try:
+        yield
+    except psycopg.Error as error:
+        if error.sqlstate is None:
+            raise
+        reason = error.diag.message_primary or str(error)
+        hint = error.diag.message_hint
+        if hint is None:
+            hint = _SETTING_HINT if reason.startswith(_UNSET_SETTING) else _READ_HINT
+        raise ViewReadError(
+            f"{view.kind} {qualified(view)} cannot be read: {reason}", resolution_hint=hint
         ) from error
 
 

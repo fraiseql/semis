@@ -37,6 +37,7 @@ where there is one, and the hint what to do about it.
 | `ResetScopeError` | `SEMIS_RESET_002` | a reset of a scenario one of whose tables has no uuid `id`, so its rows there cannot be told from others: nothing is deleted |
 | `UnreachableDatabaseError` | `SEMIS_DATABASE_001` | a database URL nothing answers at, named by host, port and database, or one that is malformed |
 | `SchemaNotBuiltError` | `SEMIS_DATABASE_002` | a database that holds no table the run reads, because its schema is not built there, naming the first such table |
+| `ViewReadError` | `SEMIS_DATABASE_003` | a view `coverage` counts that the database refuses to read, a materialized view never refreshed, a setting it reads unset, naming the view and PostgreSQL's reason |
 
 From Python, catch `fraiseql_semis.SemisError` for all of them.
 

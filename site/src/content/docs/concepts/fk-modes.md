@@ -85,7 +85,8 @@ empties, once it has locked the tables that
 reference the run's and found none of their rows pointing at the scenario's, reading the keys of
 [existing rows](#parents-already-in-the-database), learning keys, setting a
 [hierarchy's](/guides/scenarios/#hierarchies) paths from them, and counting a view's rows
-and tenants for [`semis coverage`](/reference/cli/#semis-coverage).
+and tenants for [`semis coverage`](/reference/cli/#semis-coverage), once it has set the
+[session variables](/reference/semis-yaml/#coverage) it reads with.
 
 ```sql
 SELECT pg_advisory_xact_lock(%s, %s)
@@ -100,6 +101,8 @@ DELETE FROM <schema>.<table> AS t USING <parent_schema>.<parent> AS p
 SELECT count(*) FROM <schema>.<table>
 
 SELECT count(*), count(DISTINCT <tenant_column>) FROM <schema>.<view>
+
+SELECT set_config(%s, %s, true)
 
 LOCK TABLE <tables> IN SHARE MODE
 

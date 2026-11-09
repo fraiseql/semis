@@ -156,6 +156,26 @@ show that another's are hidden; in CI, `--fail-on-single-tenant` makes that a fa
 semis coverage scenarios/two_tenants.yaml --fail-on-single-tenant
 ```
 
+## Views scoped by the request's identity
+
+A query view may scope its rows by who asks: fraiseql sets session variables per
+request, from the identity it serves, and the view reads them, often through one filter
+function, `current_setting('app.agent_role', true)`. With nothing set, such a view shows
+no rows, which `semis coverage` would report as `no rows` over full tables. Name, in
+`semis.yaml`, the identity the report reads as:
+
+```yaml
+coverage:
+  session_variables:
+    app.agent_role: manager
+```
+
+Each is set with `set_config` in the report's transaction, which is rolled back. Only
+custom settings, `prefix.name`, are taken; a view that stays empty with them set is a
+gap in the seeds. A row-level security policy reads them too, but applies only to a role
+it binds: a superuser, or a table's owner while the table does not force its policies,
+reads every row whatever is set.
+
 ## Next steps
 
 - [The scenario file](/reference/scenario-file/): `tenants:` and `crosses_tenants:`

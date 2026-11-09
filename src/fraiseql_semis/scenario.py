@@ -958,9 +958,20 @@ class ScenarioManager:
                 deleted.append(Deleted(qualified(ref), rows, kept, restarted))
         return tuple(deleted)
 
-    def coverage(self, scenario: Scenario, *, connection: Connection) -> tuple[ViewCount, ...]:
+    def coverage(
+        self,
+        scenario: Scenario,
+        *,
+        connection: Connection,
+        session_variables: Mapping[str, str] | None = None,
+    ) -> tuple[ViewCount, ...]:
         """What each view holds that a table *scenario* writes reaches, as *connection*
         sees it: its rows, and its tenants when it outputs the project's tenant column.
+
+        *session_variables*, custom settings ``prefix.name`` to their values, are set
+        first with ``set_config(name, value, true)``, until the caller's transaction
+        ends: a view scoped by one counts the rows its identity sees (D57). A name or a
+        value semis refuses is a ``ProjectError``, before any is set.
 
         Nothing is written; the caller owns the transaction. A view that reaches a table
         only through a routine's body is not found (D56).
@@ -972,6 +983,7 @@ class ScenarioManager:
                 self._written_tables(scenario),
                 tenant_column=None if self._tenancy is None else self._tenancy.column,
                 connection=connection,
+                session_variables=session_variables,
             )
 
     def _refuse_pointed_at(

@@ -162,8 +162,24 @@ materialized views and TVIEWs, and a TVIEW's `function_reads`, but not a routine
 a view reading a table only through a function it calls is not listed, and the report
 says so.
 
-With `--format json`, the report is a JSON list, one object per view, and that last line
-goes to stderr:
+A view that scopes its rows by a session variable, as fraiseql sets them per request
+from the identity it serves, shows `no rows` while the variable is unset. The session
+variables `semis.yaml`'s [`coverage:`](/reference/semis-yaml/#coverage) names are set
+first, in the same transaction, and the report's first line names them, each value
+quoted as PostgreSQL writes a string, so an empty one reads `''`:
+
+```text
+read with app.agent_role='manager'
+view               rows  tenants
+shop.v_customer      12        2
+shop.v_order_line   120        2
+a view that reads a table only through a routine's body is not listed
+```
+
+With none named, nothing is set and no such line is printed. No other command sets them.
+
+With `--format json`, the report is a JSON list, one object per view, and the lines
+around it, what it read with and what it cannot see, go to stderr:
 
 ```json
 [
@@ -183,8 +199,13 @@ tenant on purpose. With `--fail-on-single-tenant`, it exits 1 when a view that o
 the tenant column holds fewer than two tenants, and says how many on stderr; a project
 with no `tenancy:` is refused that flag.
 
-A view whose columns confiture cannot name, a `*` over a relation the schema does not
-hold, is refused with confiture's `SchemaError`, exit 4, naming the view.
+A view, materialized view or TVIEW whose columns confiture cannot name, a `*` over a
+relation the schema does not hold, is refused with confiture's `SchemaError`, exit 4,
+naming it. A view the
+database refuses to read is refused with `ViewReadError`, exit 1, naming it and
+PostgreSQL's reason: a materialized view created `WITH NO DATA` and never refreshed, or a
+view that reads a setting with `current_setting('app.tenant')`, without `missing_ok`,
+while it is unset; name that one under `coverage: session_variables:`.
 
 | Argument or option | Takes | Description |
 |---|---|---|

@@ -14,7 +14,26 @@ import typer
 from fraiseql_semis.seeds import Format as SeedFormat
 from fraiseql_semis.seeds import Mode as SeedMode
 
-SemanticUUID = Annotated[UUID, typer.Argument(help="A UUID semis encoded.", show_default=False)]
+
+def _scenario_id(text: str) -> int:
+    """*text* as an integer, in any base Python spells (``0x5001``, ``20481``)."""
+    try:
+        return int(text, 0)
+    except ValueError:
+        raise typer.BadParameter(f"{text!r} is not a number, as 0x5001 is.") from None
+
+
+def _uuid(text: str) -> UUID:
+    """*text* as a UUID, in any spelling :class:`uuid.UUID` reads."""
+    try:
+        return UUID(text)
+    except ValueError:
+        raise typer.BadParameter(f"{text!r} is not a valid UUID.") from None
+
+
+SemanticUUID = Annotated[
+    UUID, typer.Argument(help="A UUID semis encoded.", parser=_uuid, show_default=False)
+]
 Config = Annotated[
     Path | None,
     typer.Option(
@@ -86,7 +105,7 @@ ScenarioId = Annotated[
     int | None,
     typer.Option(
         help="The scenario id the UUIDs carry, in hex (0x5001).",
-        parser=lambda text: int(text, 0),
+        parser=_scenario_id,
         metavar="<hex>",
         show_default=False,
     ),

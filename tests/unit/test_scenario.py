@@ -19,6 +19,7 @@ from fraiseql_semis.scenario import (
 from fraiseql_semis.scenario_file import catalogue, init_scenario
 from fraiseql_semis.schema import SchemaFacts
 from tests.ddl import CODES, CONTRACT, CONTRACT_CODES, HIERARCHY, HIERARCHY_CODES, TRINITY
+from tests.unit.fakes import Unreachable
 
 FACTS = SchemaFacts.from_source(TRINITY, table_codes=TableCodes(CODES))
 PRODUCTS = SchemaFacts.from_source(CONTRACT, table_codes=TableCodes(CONTRACT_CODES))
@@ -651,7 +652,7 @@ def test_a_table_the_schema_lacks_is_refused_naming_the_scenario(key: str) -> No
         "Hint: Name a table the schema holds, schema-qualified.",
     ]
     with pytest.raises(ScenarioError, match="tb_nope is not in the schema"):
-        manager.rehearse(scenario, connection=object())  # type: ignore[arg-type]
+        manager.rehearse(scenario, connection=Unreachable())
 
 
 @pytest.mark.parametrize(

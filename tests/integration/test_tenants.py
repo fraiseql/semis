@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import LiteralString
 
 import psycopg
 import pytest
@@ -80,7 +81,7 @@ def _apply(connection: psycopg.Connection, tmp_path: Path, text: str) -> None:
     manager.apply(manager.load(path), tmp_path / "out", connection=connection)
 
 
-def _one(connection: psycopg.Connection, query: str) -> object:
+def _one(connection: psycopg.Connection, query: LiteralString) -> object:
     (value,) = connection.execute(query).fetchone() or (None,)
     return value
 

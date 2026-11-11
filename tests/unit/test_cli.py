@@ -496,7 +496,14 @@ def test_every_command_passes_through_the_error_boundary() -> None:
 
 def test_a_malformed_uuid_is_a_usage_error() -> None:
     result = runner.invoke(app, ["decode-uuid", "not-a-uuid"])
-    assert (result.exit_code, "not a valid uuid" in result.output.lower()) == (2, True)
+    shown = " ".join(result.output.replace("│", " ").split())
+    assert (result.exit_code, "'not-a-uuid' is not a valid UUID." in shown) == (2, True)
+
+
+def test_a_scenario_id_that_is_not_a_number_is_a_usage_error() -> None:
+    result = runner.invoke(app, ["table", "catalog.tb_city", "--scenario-id", "zz"])
+    shown = " ".join(result.output.replace("│", " ").split())
+    assert (result.exit_code, "'zz' is not a number, as 0x5001 is." in shown) == (2, True)
 
 
 def _group() -> TyperGroup:
@@ -788,7 +795,8 @@ DRY_RUN = {
 def test_dry_run_says_what_it_does_for_each_command(command: str, said: str) -> None:
     result = runner.invoke(app, [command, "--help"], env={"COLUMNS": "300"})
     shown = " ".join(_usage(result).replace("│", " ").split())
-    assert f"--dry-run {said}" in shown
+    # typer 0.29 labels a flag's type, `<bool>`, between it and its help; 0.27 did not.
+    assert re.search(rf"--dry-run (<bool> )?{re.escape(said)}", shown)
 
 
 def test_pin_writes_the_scenarios_pin_beside_it(tmp_path: Path) -> None:

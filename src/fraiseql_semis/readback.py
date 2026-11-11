@@ -8,7 +8,7 @@ the count reads with are set. Their identifiers come from the model, composed wi
 ``psycopg.sql.Identifier``, and their values are parameters.
 """
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import NamedTuple, cast
 
@@ -66,7 +66,7 @@ _SET_PATHS = sql.SQL(
 @contextmanager
 def transaction(
     database_url: str, *, commit: bool = True, read_only: bool = False
-) -> Iterator[Connection]:
+) -> Generator[Connection]:
     """A connection whose one transaction is committed when the block ends, unless *commit*
     is false, and rolled back if it raises. *read_only* makes PostgreSQL refuse any
     write in it."""
@@ -88,7 +88,7 @@ def transaction(
 
 
 @contextmanager
-def exclusive(database_url: str, scenario_id: int) -> Iterator[None]:
+def exclusive(database_url: str, scenario_id: int) -> Generator[None]:
     """One apply of *scenario_id* at a time: a lock on a connection of its own, held until
     the block ends, committed or not.
 
@@ -406,7 +406,7 @@ def _in_order(
 
 
 @contextmanager
-def _built(table: ObjectRef) -> Iterator[None]:
+def _built(table: ObjectRef) -> Generator[None]:
     """Refuse a read of *table* in a database whose schema is not built: the first
     query a run makes, before anything is written."""
     try:
@@ -427,7 +427,7 @@ _READ_HINT = "Read the view with psql, as the role semis connects as, to see why
 
 
 @contextmanager
-def _readable(view: ObjectRef) -> Iterator[None]:
+def _readable(view: ObjectRef) -> Generator[None]:
     """Refuse a read of *view* that the server refused, naming the view and the server's
     reason: a materialized view never refreshed, a setting it reads unset, a privilege
     the role lacks. A connection that drops is not the view's, and is not caught."""

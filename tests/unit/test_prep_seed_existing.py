@@ -44,7 +44,7 @@ def _scenario(tmp_path: Path, text: str = SCENARIO, rows: object = (CONTINENTS,)
             twins=["prep_seed.tb_country"],
             existing=[table.name for table in scenario.existing],
         )
-        pin_file.write(pin_file.path_for(path, "countries"), replace(pin, rows=rows))  # type: ignore[arg-type]
+        pin_file.write(pin_file.path_for(path, "countries"), replace(pin, rows=rows))
     return path
 
 

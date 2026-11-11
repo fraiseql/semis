@@ -462,7 +462,7 @@ column semis writes does. `--no-pin` skips the check for one run and says so.
 uv sync --all-extras
 uv run pytest tests/unit/          # no database needed
 uv run ruff check . && uv run ruff format --check .
-uv run ty check src/fraiseql_semis/
+uv run ty check
 
 export SEMIS_TEST_DATABASE_URL=postgresql:///semis_test
 uv run pytest tests/integration/

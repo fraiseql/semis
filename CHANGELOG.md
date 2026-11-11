@@ -6,6 +6,23 @@ All notable changes to fraiseql-semis are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-11
+
+### Changed
+
+- **typer 0.24 or later is required.** semis declared 0.19, but fraiseql-confiture
+  already required 0.24, so no install resolved anything older. The floor is now the
+  one CI tests.
+
+### Fixed
+
+- **A scenario id that is not a number says so.** `--scenario-id zz` printed only `zz`,
+  or, under typer 0.29, Python's `invalid literal for int() with base 0`. It is now
+  `'zz' is not a number, as 0x5001 is.` (exit 2).
+- **A malformed UUID says so on any typer.** Under typer 0.29, `semis decode-uuid nope`
+  printed pydantic's `Input should be a valid UUID, invalid character: found n at 0`.
+  It says `'nope' is not a valid UUID.` again (exit 2).
+
 ## [0.8.1] - 2026-11-09
 
 ### Added
@@ -542,7 +559,8 @@ The first release.
   prints, and requires fraiseql-confiture 1.27, whose `CONFIG_003` refusal of a
   `--database-url` no longer repeats the password either.
 
-[Unreleased]: https://github.com/fraiseql/semis/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/fraiseql/semis/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/fraiseql/semis/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/fraiseql/semis/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/fraiseql/semis/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/fraiseql/semis/compare/v0.7.2...v0.7.3

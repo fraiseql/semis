@@ -94,7 +94,7 @@ class Spread:
 
     def rows_in(self, table: str, tenant: int) -> tuple[int, ...]:
         """*table*'s rows, by position, of *tenant*."""
-        return self._in(table, tenant)  # ty: ignore[unresolved-attribute]
+        return self._in(table, tenant)  # ty: ignore[missing-attribute]
 
     def _rows_in(self, table: str, tenant: int) -> tuple[int, ...]:
         return tuple(row for row, owner in enumerate(self.rows[table]) if owner == tenant)

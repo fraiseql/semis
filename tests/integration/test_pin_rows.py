@@ -84,9 +84,9 @@ def database(database_url: str) -> Iterator[str]:
         admin.execute(f"DROP SCHEMA IF EXISTS {SCHEMA}, {STAGING} CASCADE")
 
 
-def _execute(database: str, statement: LiteralString) -> None:
+def _execute(database: str, statement: LiteralString, params: tuple[object, ...] = ()) -> None:
     with psycopg.connect(database, autocommit=True) as connection:
-        connection.execute(statement)
+        connection.execute(statement, params)
 
 
 def _pin(tmp_path: Path, database: str | None, *args: str, scenario: str = SCENARIO) -> Result:
@@ -201,12 +201,9 @@ def test_the_same_rows_in_another_order_write_nothing(database: str, tmp_path: P
     _pin(tmp_path, database)
     pin = tmp_path / "customers.pin.json"
     before = pin.read_bytes()
-    _execute(
-        database,
-        f"DELETE FROM {CATEGORY} WHERE identifier = 'books'; "
-        f"INSERT INTO {CATEGORY} (id, identifier) "
-        f"VALUES ('{_rows(tmp_path)[CATEGORY][0][1]}', 'books')",
-    )
+    books = _rows(tmp_path)[CATEGORY][0][1]
+    _execute(database, f"DELETE FROM {CATEGORY} WHERE identifier = 'books'")
+    _execute(database, f"INSERT INTO {CATEGORY} (id, identifier) VALUES (%s, 'books')", (books,))
     again = _pin(tmp_path, database)
     assert (again.output, pin.read_bytes()) == (f"{pin} is unchanged\n", before)
 

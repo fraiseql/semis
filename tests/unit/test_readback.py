@@ -1,6 +1,6 @@
 """readback.learn's refusals, which it makes before it reaches the database."""
 
-from typing import Any, cast
+from typing import Any, cast, override
 
 import psycopg
 import pytest
@@ -9,43 +9,28 @@ from fraiseql_semis import readback
 from fraiseql_semis.codes import TableCodes
 from fraiseql_semis.errors import ResolutionError
 from fraiseql_semis.schema import SchemaFacts
-
-
-class _Unreachable:
-    """A connection that fails any test that uses it."""
-
-    def cursor(self) -> Any:
-        raise AssertionError("the connection was used")
-
-    def execute(self, query: Any, params: Any = None) -> Any:
-        raise AssertionError(f"the connection was used: {query}, {params}")
-
-    def commit(self) -> None:
-        raise AssertionError("the connection was used")
-
-    def rollback(self) -> None:
-        raise AssertionError("the connection was used")
+from tests.unit.fakes import Unreachable
 
 
 def test_a_table_without_trinity_roles_is_refused_before_the_database() -> None:
     ddl = "CREATE SCHEMA catalog; CREATE TABLE catalog.tb_note (body TEXT);"
     facts = SchemaFacts.from_source(ddl, table_codes=TableCodes({"catalog.tb_note": 0x0A}))
     with pytest.raises(ResolutionError, match=r"catalog\.tb_note shows no surrogate key"):
-        readback.learn(_Unreachable(), facts.facts_for("catalog.tb_note"), ["a"])
+        readback.learn(Unreachable(), facts.facts_for("catalog.tb_note"), ["a"])
 
 
 def test_paths_without_a_natural_id_are_refused_before_the_database() -> None:
     ddl = "CREATE SCHEMA catalog; CREATE TABLE catalog.tb_note (body TEXT);"
     facts = SchemaFacts.from_source(ddl, table_codes=TableCodes({"catalog.tb_note": 0x0A}))
     with pytest.raises(ResolutionError, match=r"catalog\.tb_note shows no natural id"):
-        readback.set_paths(_Unreachable(), facts.facts_for("catalog.tb_note"), "path", {})
+        readback.set_paths(Unreachable(), facts.facts_for("catalog.tb_note"), "path", {})
 
 
 def test_an_existing_table_without_a_surrogate_key_is_refused_before_the_database() -> None:
     ddl = "CREATE SCHEMA catalog; CREATE TABLE catalog.tb_note (identifier TEXT);"
     keys = SchemaFacts.from_source(ddl, table_codes=TableCodes({})).keys_for("catalog.tb_note")
     with pytest.raises(ResolutionError, match=r"existing catalog\.tb_note shows no surrogate key"):
-        readback.existing_keys(_Unreachable(), keys, by="identifier", values=None)
+        readback.existing_keys(Unreachable(), keys, by="identifier", values=None)
 
 
 @pytest.mark.parametrize(
@@ -64,11 +49,11 @@ def test_the_reset_quotes_every_name(ddl: str, table: str) -> None:
     """A reserved word, a dot or a capital letter: each reads back as the table it names."""
     (ref,) = SchemaFacts.from_source(ddl, table_codes=TableCodes({})).insert_order()
     connection = _Deleting()
-    readback.delete_range(connection, ref, "id", ("lo", "hi"))  # type: ignore[arg-type]
+    readback.delete_range(connection, ref, "id", ("lo", "hi"))
     assert connection.statements == [f'DELETE FROM {table} WHERE "id" BETWEEN %s AND %s']
 
 
-class _Deleting:
+class _Deleting(Unreachable):
     """A connection that records each statement, as a delete of no row."""
 
     rowcount = 0
@@ -76,7 +61,8 @@ class _Deleting:
     def __init__(self) -> None:
         self.statements: list[str] = []
 
-    def execute(self, query: Any, _params: Any = None) -> Any:
+    @override
+    def execute(self, query: Any, params: Any = None) -> Any:
         self.statements.append(query.as_string())
         return self
 
@@ -141,13 +127,14 @@ def test_the_lock_class_is_an_int4() -> None:
     assert -(2**31) <= readback.SEMIS_LOCK_CLASS < 2**31
 
 
-class _Selecting:
+class _Selecting(Unreachable):
     """A connection that records each statement, and answers it with no row."""
 
     def __init__(self) -> None:
         self.statements: list[str] = []
 
-    def execute(self, query: Any, _params: Any = None) -> Any:
+    @override
+    def execute(self, query: Any, params: Any = None) -> Any:
         self.statements.append(query.as_string())
         return self
 
@@ -162,7 +149,7 @@ def test_an_existing_read_selects_only_the_columns_it_is_asked_for() -> None:
     keys = SchemaFacts.from_source(ddl, table_codes=TableCodes({})).keys_for("s.tb_unit")
     connection = _Selecting()
     with pytest.raises(ResolutionError, match=r"existing s\.tb_unit holds no rows"):
-        readback.existing_rows(connection, keys, by=None, values=None, natural_id=None)  # type: ignore[arg-type]
+        readback.existing_rows(connection, keys, by=None, values=None, natural_id=None)
     assert connection.statements == ['SELECT "pk_unit" FROM "s"."tb_unit" ORDER BY "pk_unit"']
 
 
@@ -170,13 +157,14 @@ def test_rows_named_by_values_need_the_column_that_names_them() -> None:
     ddl = "CREATE SCHEMA s; CREATE TABLE s.tb_unit (pk_unit BIGINT PRIMARY KEY);"
     keys = SchemaFacts.from_source(ddl, table_codes=TableCodes({})).keys_for("s.tb_unit")
     with pytest.raises(ValueError, match="need the column that names them"):
-        readback.existing_rows(_Unreachable(), keys, by=None, values=["x"], natural_id=None)
+        readback.existing_rows(Unreachable(), keys, by=None, values=["x"], natural_id=None)
 
 
-class _Dropped(_Unreachable):
+class _Dropped(Unreachable):
     """A connection lost mid-read: psycopg's error carries no SQLSTATE."""
 
-    def execute(self, *_: Any) -> Any:
+    @override
+    def execute(self, query: Any, params: Any = None) -> Any:
         raise psycopg.OperationalError("server closed the connection unexpectedly")
 
 

@@ -1,6 +1,6 @@
 """The already-applied check: which tables it asks, and which refusal it makes."""
 
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -8,7 +8,9 @@ from fraiseql_semis.codes import TableCodes
 from fraiseql_semis.errors import AlreadyAppliedError
 from fraiseql_semis.scenario import Scenario, ScenarioManager, TableSpec
 from fraiseql_semis.schema import SchemaFacts
+from fraiseql_semis.seeds import Mode
 from tests.ddl import CODES, TRINITY
+from tests.unit.fakes import Unreachable
 
 
 class _Found:
@@ -19,31 +21,32 @@ class _Found:
         return (self._found,)
 
 
-class _Recording:
+class _Recording(Unreachable):
     """A connection that answers the check from *holding*, and records what it asked."""
 
     def __init__(self, *holding: str) -> None:
         self.holding = set(holding)
         self.asked: list[str] = []
 
-    def execute(self, query: Any, _params: Any = None) -> _Found:
+    @override
+    def execute(self, query: Any, params: Any = None) -> _Found:
         table = query.as_string().split(" FROM ", 1)[1].split(" WHERE ", 1)[0]
         self.asked.append(table)
         return _Found(table in self.holding)
 
 
-def _scenario(mode: str, *tables: str) -> Scenario:
+def _scenario(mode: Mode, *tables: str) -> Scenario:
     return Scenario(
         id=0x5001,
         name="s",
-        mode=mode,  # type: ignore[arg-type]
+        mode=mode,
         tables=tuple(TableSpec(table, 2) for table in tables),
     )
 
 
 def _refusal(manager: ScenarioManager, scenario: Scenario, connection: _Recording) -> str:
     with pytest.raises(AlreadyAppliedError) as refused:
-        manager._refuse_reapply(scenario, connection)  # type: ignore[arg-type]
+        manager._refuse_reapply(scenario, connection)
     return refused.value.message
 
 
@@ -89,10 +92,10 @@ UNCHECKABLE_CODES = {**CODES, "catalog.tb_note": 0x0A0B0C0D, "catalog.tb_tag": 0
 @pytest.mark.parametrize(
     "table", ["catalog.tb_note", "catalog.tb_tag"], ids=["no natural id", "a text id"]
 )
-def test_a_table_the_check_cannot_read_is_not_asked(mode: str, table: str) -> None:
+def test_a_table_the_check_cannot_read_is_not_asked(mode: Mode, table: str) -> None:
     manager = ScenarioManager(
         SchemaFacts.from_source(UNCHECKABLE, table_codes=TableCodes(UNCHECKABLE_CODES))
     )
     connection = _Recording()
-    manager._refuse_reapply(_scenario(mode, "catalog.tb_continent", table), connection)  # type: ignore[arg-type]
+    manager._refuse_reapply(_scenario(mode, "catalog.tb_continent", table), connection)
     assert [asked for asked in connection.asked if table.split(".")[1] in asked] == []

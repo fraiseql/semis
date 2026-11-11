@@ -30,7 +30,7 @@ tables:
 """
 
 
-def _load(tmp_path: Path, text: str) -> object:
+def _load(tmp_path: Path, text: str) -> Scenario:
     path = tmp_path / "shop.yaml"
     path.write_text(text)
     return ScenarioManager(FACTS).load(path)
@@ -41,13 +41,13 @@ def test_locales_and_translations_load(tmp_path: Path) -> None:
         tmp_path,
         HEADER + "locales: [fr-FR, en-gb, {code: fr, faker: fr_CA}, en]\n" + TRANSLATED_TABLE,
     )
-    assert scenario.locales == (  # type: ignore[attr-defined]
+    assert scenario.locales == (
         Locale("fr-FR", "fr_FR"),
         Locale("en-gb", "en_GB"),
         Locale("fr", "fr_CA"),
         Locale("en", "en"),
     )
-    (spec,) = scenario.tables  # type: ignore[attr-defined]
+    (spec,) = scenario.tables
     assert spec.translations == "catalog.tl_continent"
 
 
@@ -349,7 +349,7 @@ def _prep_seed(tmp_path: Path, rows: object) -> tuple[ScenarioManager, Path]:
         existing=["catalog.tb_locale"],
         coded={"catalog.tb_locale": "code"},
     )
-    pin_file.write(pin_file.path_for(path, "shop"), replace(taken, rows=rows))  # type: ignore[arg-type]
+    pin_file.write(pin_file.path_for(path, "shop"), replace(taken, rows=rows))
     return manager, path
 
 
@@ -486,7 +486,7 @@ def test_a_pseudo_locale_loads(tmp_path: Path) -> None:
     scenario = _load(
         tmp_path, HEADER + "locales: [fr-FR]\npseudo_locale: qps-ploc\n" + TRANSLATED_TABLE
     )
-    assert scenario.pseudo_locale == "qps-ploc"  # type: ignore[attr-defined]
+    assert scenario.pseudo_locale == "qps-ploc"
 
 
 @pytest.mark.parametrize(
@@ -575,7 +575,7 @@ def test_coverage_loads_as_exact_fractions(tmp_path: Path) -> None:
     scenario = _load(
         tmp_path, COVERED + "coverage: {en-GB: 0.8, fr-FR: 0, qps-ploc: 1}\n" + TRANSLATED_TABLE
     )
-    assert scenario.coverage == {  # type: ignore[attr-defined]
+    assert scenario.coverage == {
         "en-GB": Fraction(4, 5),
         "fr-FR": Fraction(0),
         "qps-ploc": Fraction(1),

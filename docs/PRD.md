@@ -1,6 +1,6 @@
 # PRD: fraiseql-semis
 
-**Status**: 0.8.1
+**Status**: 0.8.2
 **Reads with**: [ARCHITECTURE.md](./ARCHITECTURE.md) (how it is built, and why),
 [../README.md](../README.md) (how it is used)
 

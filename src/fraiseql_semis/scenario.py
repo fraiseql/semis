@@ -7,7 +7,7 @@ reads a scenario's YAML into this module's model.
 """
 
 import re
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Generator, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
@@ -1419,7 +1419,7 @@ _LABELS = {"id": "scenario_id", "seed": "seed", "locale": "locale"}
 
 
 @contextmanager
-def _naming(scenario: str) -> Iterator[None]:
+def _naming(scenario: str) -> Generator[None]:
     """Name *scenario* in what its file or its run refuses: a table entry, the generator
     and the resolver know only tables and columns (ARCHITECTURE §9)."""
     try:

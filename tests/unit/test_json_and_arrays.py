@@ -49,7 +49,7 @@ def test_a_json_column_is_a_small_object_of_words(column: str) -> None:
     assert all(
         isinstance(key, str) and isinstance(item, str)
         for value in values
-        for key, item in value.items()  # ty: ignore[unresolved-attribute]
+        for key, item in value.items()  # ty: ignore[missing-attribute]
     )
     assert len({json.dumps(value, sort_keys=True) for value in values}) > 1
     assert json.loads(json.dumps(values)) == values

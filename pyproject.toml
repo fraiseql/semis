@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fraiseql-semis"
-version = "0.8.1"
+version = "0.8.2"
 description = "Semantic UUID-encoded fake data generator for PostgreSQL trinity pattern schemas"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -52,8 +52,9 @@ dependencies = [
     # reading goes through confiture, never through a hand-written catalog query.
     # Floor 3.3.0: confiture executes template strings, which psycopg takes from 3.3.0.
     "psycopg[binary]>=3.3.0",
-    # The `semis` command, built as confiture's own CLI is.
-    "typer>=0.19",
+    # The `semis` command, built as confiture's own CLI is. Floor 0.24: confiture's own,
+    # so the lowest-direct runs test it; 0.19 was declared but never resolved.
+    "typer>=0.24",
 ]
 
 [project.optional-dependencies]

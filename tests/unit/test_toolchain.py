@@ -137,12 +137,12 @@ FLOORS = {
     "faker": "faker>=24.0.0",
     "psycopg": "psycopg[binary]>=3.3.0",
     "pyyaml": "pyyaml>=6.0.1",
-    "typer": "typer>=0.19",
+    "typer": "typer>=0.24",
 }
 """The lowest release of each that installs on Python 3.14 and passes the whole suite under
-``uv run --resolution lowest-direct``: typer 0.12-0.18 fail on import, PyYAML's older
-releases have no cp314 wheel, and psycopg executes confiture's template strings from 3.3.0
-on (D53)."""
+``uv run --resolution lowest-direct``: typer's is fraiseql-confiture's own, below which no
+install resolves; PyYAML's older releases have no cp314 wheel, and psycopg executes
+confiture's template strings from 3.3.0 on (D53)."""
 
 
 def test_every_runtime_floor_is_one_semis_runs_on() -> None:

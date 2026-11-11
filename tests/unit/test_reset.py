@@ -1,6 +1,6 @@
 """The reset: which tables it deletes from, and which it refuses to."""
 
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -10,6 +10,7 @@ from fraiseql_semis.errors import ResetScopeError
 from fraiseql_semis.scenario import Scenario, ScenarioManager, TableSpec
 from fraiseql_semis.schema import SchemaFacts
 from tests.ddl import CODES, TRINITY
+from tests.unit.fakes import Unreachable
 
 UNSCOPED = (
     TRINITY
@@ -36,13 +37,14 @@ MANAGER = ScenarioManager(
 )
 
 
-class _Recording:
+class _Recording(Unreachable):
     """A connection that records each statement, and answers a count with none."""
 
     def __init__(self) -> None:
         self.statements: list[str] = []
 
-    def execute(self, query: Any, _params: Any = None) -> Any:
+    @override
+    def execute(self, query: Any, params: Any = None) -> Any:
         self.statements.append(query.as_string())
         return self
 
@@ -68,7 +70,7 @@ def test_a_table_without_a_uuid_id_is_refused_naming_it(table: str) -> None:
         match=rf"^scenario s: {table} has no uuid id, so the reset cannot tell the "
         "scenario's rows there from others",
     ):
-        MANAGER.reset(_scenario(table), connection=_Recording())  # type: ignore[arg-type]
+        MANAGER.reset(_scenario(table), connection=_Recording())
 
 
 def test_an_unscoped_table_is_refused_before_any_row_is_deleted() -> None:
@@ -77,7 +79,7 @@ def test_an_unscoped_table_is_refused_before_any_row_is_deleted() -> None:
     with pytest.raises(ResetScopeError, match=r"^scenario s: catalog\.tb_badge has no uuid id"):
         MANAGER.reset(
             _scenario("catalog.tb_badge", "catalog.tb_continent"),
-            connection=connection,  # type: ignore[arg-type]
+            connection=connection,
         )
     assert [s for s in connection.statements if s.startswith("DELETE")] == []
 
@@ -85,5 +87,5 @@ def test_an_unscoped_table_is_refused_before_any_row_is_deleted() -> None:
 def test_no_referencing_table_takes_no_lock() -> None:
     """``LOCK TABLE`` names at least one table: with none, nothing is sent."""
     connection = _Recording()
-    readback.lock_shared(connection, [])  # type: ignore[arg-type]
+    readback.lock_shared(connection, [])
     assert connection.statements == []

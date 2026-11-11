@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import LiteralString
 
 import psycopg
 import pytest
@@ -61,12 +62,15 @@ def _apply(connection: psycopg.Connection, tmp_path: Path, mode: str) -> None:
     manager.apply(manager.load(path), tmp_path / "out", connection=connection)
 
 
-def _mismatches(connection: psycopg.Connection, schema: str, joined_on: str) -> int:
-    (mismatched,) = connection.execute(
+def _mismatches(
+    connection: psycopg.Connection, schema: LiteralString, joined_on: LiteralString
+) -> int:
+    row = connection.execute(
         f"SELECT count(*) FROM {schema}.tb_contact AS c JOIN {schema}.tb_organization AS p "
         f"ON {joined_on} WHERE c.tenant_id IS DISTINCT FROM p.id"
-    ).fetchone() or (None,)
-    return mismatched
+    ).fetchone()
+    assert row is not None
+    return row[0]
 
 
 def test_read_back_copies_the_parents_id(connection: psycopg.Connection, tmp_path: Path) -> None:

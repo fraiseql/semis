@@ -12,6 +12,7 @@ from fraiseql_semis.pin import PinnedRead, SchemaPin, merge_reads
 from fraiseql_semis.scenario import ScenarioManager
 from fraiseql_semis.schema import SchemaFacts
 from tests.ddl import CODES, TRINITY
+from tests.unit.fakes import Unreachable
 
 BOOKS, MUSIC, FILM = (f"00000000-0000-4000-8000-00000000000{n}" for n in (1, 2, 3))
 CATEGORIES = PinnedRead(
@@ -133,4 +134,4 @@ def test_an_existing_table_without_a_uuid_id_cannot_be_pinned(tmp_path: Path) ->
         match=r"^scenario countries: existing catalog\.tb_continent has no uuid id for a "
         r"prep-seed child to carry",
     ):
-        manager.pin(manager.load(path), path, connection=object())  # type: ignore[arg-type]
+        manager.pin(manager.load(path), path, connection=Unreachable())

@@ -2,6 +2,7 @@
 
 from fractions import Fraction
 from typing import Any
+from uuid import UUID
 
 import pytest
 from faker import Faker
@@ -41,6 +42,13 @@ CREATE TABLE catalog.tz_note (
 """
 )
 CODES = TRANSLATED_CODES | {"catalog.tz_note": 0x0F101112}
+
+
+def _id(row: Row) -> UUID:
+    """*row*'s ``id``, which the generator draws as a UUID."""
+    value = row["id"]
+    assert isinstance(value, UUID)
+    return value
 
 
 def _walk(
@@ -128,10 +136,10 @@ def test_a_translation_rows_uuid_is_its_entitys_sequence_times_256_plus_its_slot
     )
     rows = _walk(with_id, counts={CATEGORY: 7})[TL]
     seventh_in_english = rows[6 * 2 + 1]
-    fields = SemanticUUIDGenerator.decode(seventh_in_english["id"])  # type: ignore[arg-type]
+    fields = SemanticUUIDGenerator.decode(_id(seventh_in_english))
     assert fields.sequence == 7 * 256 + 2
     low, high = scenario_bounds(CODES[TL], 0x5008)
-    assert all(low <= row["id"] <= high for row in rows)  # type: ignore[operator]
+    assert all(low <= _id(row) <= high for row in rows)
 
 
 def test_a_run_makes_one_faker_per_declared_locale(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -239,7 +247,7 @@ def test_each_entity_gets_a_pseudo_row_last_its_label_the_default_ones_transform
 
 def test_a_pseudo_row_is_at_slot_255_and_moves_no_other_uuid() -> None:
     with_pseudo, without = _pseudo_walk(WITH_ID)[TL], _pseudo_walk(WITH_ID, pseudo=None)[TL]
-    sequences = [SemanticUUIDGenerator.decode(row["id"]).sequence for row in with_pseudo]  # type: ignore[arg-type]
+    sequences = [SemanticUUIDGenerator.decode(_id(row)).sequence for row in with_pseudo]
     assert sequences[2::3] == [sequence * 256 + 255 for sequence in (1, 2, 3)]
     assert [row["id"] for k, row in enumerate(with_pseudo) if k % 3 != 2] == [
         row["id"] for row in without
@@ -290,7 +298,7 @@ def _covered_walk(coverage: dict[str, Fraction], *, seed: int = 42) -> list[Row]
 def test_coverage_leaves_out_the_rows_kept_does_not_keep() -> None:
     rows = _covered_walk({"en-GB": Fraction("0.8")})
     english = [row for row in rows if row["fk_locale"] == GB]
-    sequences = {SemanticUUIDGenerator.decode(row["id"]).sequence // 256 for row in english}  # type: ignore[arg-type]
+    sequences = {SemanticUUIDGenerator.decode(_id(row)).sequence // 256 for row in english}
     assert len(english) == 16
     assert sequences == kept(range(1, 21), Fraction("0.8"), scenario=0x5008, table=TL, code="en-GB")
     assert len([row for row in rows if row["fk_locale"] == FR]) == 20
@@ -311,7 +319,7 @@ def test_a_pseudo_row_keeps_its_source_when_the_default_row_is_left_out() -> Non
 def test_the_gaps_do_not_follow_the_seed() -> None:
     def gaps(seed: int) -> set[object]:
         return {
-            SemanticUUIDGenerator.decode(row["id"]).sequence  # type: ignore[arg-type]
+            SemanticUUIDGenerator.decode(_id(row)).sequence
             for row in _covered_walk({"en-GB": Fraction("0.6")}, seed=seed)
         }
 

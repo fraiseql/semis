@@ -99,7 +99,7 @@ def test_a_read_back_scenario_whose_pin_records_rows_is_refused(tmp_path: Path) 
     path = _pinned(tmp_path)
     pin = tmp_path / "minimal_seed.pin.json"
     document = json.loads(pin.read_text())
-    reads: list[object] = []
+    reads: list[dict[str, object]] = []
     document["rows"] = {"digest": digest(reads), "reads": reads}
     pin.write_text(json.dumps(document))
     path.write_text(SCENARIO.replace("prep-seed", "read-back"))

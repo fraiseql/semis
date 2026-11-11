@@ -43,7 +43,7 @@ jobs:
       CONFITURE_DATABASE_URL: postgresql://seeds:seeds@localhost:5432/continents_check
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: astral-sh/setup-uv@v10.3.3
       - run: uv sync --locked
       - name: The committed pin is the schema's
         run: uv run semis pin scenarios/continents.yaml --check

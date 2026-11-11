@@ -261,7 +261,7 @@ def _refusal(block: Block, context: Context) -> None:
     with pytest.raises(platform.SeedError) as refused:
         eval(call.removeprefix(">>> "), names)
     assert " ".join(refusal.removeprefix("SeedError:").split()) == str(refused.value)
-    assert not names["path"].exists()  # type: ignore[attr-defined]
+    assert not names["path"].exists()
 
 
 _WRITE_PK = (
@@ -324,8 +324,8 @@ def _again(block: Block, context: Context) -> None:
     again = semis(reset)
     assert (again.exit_code, again.output.splitlines()[-1]) == (0, "committed"), again.output
     with psycopg.connect(url) as connection:
-        (twins,) = connection.execute("SELECT count(*) FROM prep_seed.tb_continent").fetchone()
-    assert twins == 7
+        twins = connection.execute("SELECT count(*) FROM prep_seed.tb_continent").fetchone()
+    assert twins == (7,)
 
 
 _REFUSED = "scenario minimal_seed is already applied: prep_seed.tb_continent holds its rows"

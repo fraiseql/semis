@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from confiture.platform import ConfigurationError, parse_schema
+from confiture.platform import ConfigurationError, ConfiturError, parse_schema
 
 from tests.ddl import TRINITY
 
@@ -49,3 +49,20 @@ def test_a_string_in_a_sequence_is_a_path(tmp_path: Path) -> None:
     (tmp_path / "sub" / "20.sql").write_text("CREATE TABLE s.t2 (a int);")
     model = parse_schema([tmp_path / "10.sql", str(tmp_path / "sub")])
     assert [ref.display for ref in model.tables] == ["s.t1", "s.t2"]
+
+
+@pytest.mark.parametrize(
+    "ddl",
+    [
+        'CREATE SCHEMA s; CREATE TABLE s."Tb" (id BIGINT PRIMARY KEY);',
+        'CREATE SCHEMA "Sales"; CREATE TABLE "Sales".tb (id BIGINT PRIMARY KEY);',
+        'CREATE SCHEMA s; CREATE TABLE s."order line" (id BIGINT PRIMARY KEY);',
+    ],
+)
+def test_a_name_that_needs_quotes_is_refused(ddl: str) -> None:
+    """semis composes every name into SQL bare: confiture refuses one that needs quotes
+    (DIFFER_403, since 1.49), so no table semis writes is one it would misname. The
+    error is not in ``confiture.platform``; semis catches it as a ``ConfiturError``."""
+    with pytest.raises(ConfiturError) as refused:
+        parse_schema(ddl)
+    assert (refused.value.error_code, refused.value.exit_code) == ("DIFFER_403", 5)

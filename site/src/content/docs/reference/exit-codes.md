@@ -15,7 +15,7 @@ confiture's exit code and hint. Anything else is a bug, and keeps its traceback.
 | `1` | semis refused: a scenario, a project, a row, a pin, a scenario already applied, a reset it cannot scope or that another row blocks, a database it cannot reach or whose schema is not built. Also `semis validate-seeds` with a `CRITICAL` or `ERROR` finding, `semis list-scenarios` when two files share a scenario id, and `semis coverage --fail-on-single-tenant` when a view that outputs the tenant column holds fewer than two tenants. |
 | `2` | The command line is wrong: an unknown command or option, a missing argument, `--output` missing where seeds are written, a UUID `decode-uuid` is given that semis did not encode. |
 | `4` | confiture refused the schema: a table or column not in it, a foreign-key cycle. |
-| `5` | confiture refused a seed or a configuration: a seed file PostgreSQL rejects on apply, a database URL that is not one, two database URLs given at once. |
+| `5` | confiture refused a seed, a configuration or a name: a seed file PostgreSQL rejects on apply, a database URL that is not one, two database URLs given at once, a schema that names a table, schema or column only quotes can write. |
 
 ## semis' errors
 
@@ -53,6 +53,7 @@ re-wrapping them would hide their code and hint.
 | `DependencyCycleError` | 4 | foreign keys that form a cycle; the hint suggests a `DEFERRABLE` key |
 | `SeedError` | 5 | a seed file that cannot be written or applied: a duplicate key, an identity column written |
 | `ConfigurationError` | 5 | a malformed `--database-url`, two explicit database URLs, a missing environment file |
+| `DifferError` (`DIFFER_403`) | 5 | a name that needs quotes, such as `"User"` or `"order line"`, naming the file and line that declares it; see [names](/reference/semis-yaml/#names-that-need-quotes) |
 
 ## Next steps
 

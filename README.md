@@ -38,7 +38,7 @@ their lock.
 ## Install
 
 ```bash
-uv add fraiseql-semis          # brings fraiseql-confiture>=1.47,<2
+uv add fraiseql-semis          # brings fraiseql-confiture>=1.49,<2
 ```
 
 semis runs on Python 3.14 and writes to PostgreSQL 16 or later.

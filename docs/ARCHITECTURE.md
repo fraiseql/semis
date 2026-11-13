@@ -2,7 +2,7 @@
 
 **Version**: 1.2
 **Date**: 2026-11-03
-**Depends on**: `fraiseql-confiture>=1.47,<2`, Python 3.14
+**Depends on**: `fraiseql-confiture>=1.49,<2`, Python 3.14
 **Companion documents**: [PRD.md](./PRD.md) (what semis is for), [../README.md](../README.md) (how it is used)
 
 > Every confiture behaviour this document states was measured against a trinity-pattern
@@ -736,8 +736,8 @@ and exits 1 on a `CRITICAL` or `ERROR`, as `list-scenarios` exits 1 on a shared 
 | **#812** | `confiture.platform` published a view as its name and definition: not the columns it outputs, nor the relations it reads | 1.46 | `view_columns` and `view_reads`, read by `semis coverage` (D56) |
 | **#815** | `ObjectRef.display` spelled a table one way from DDL and another from a live database, and was the only key semis had | 1.46 | `ObjectRef.identity`, the `(schema, name)` key, wherever semis matches references (D54) |
 
-The floor is 1.47, the first release measured with the view API `semis coverage` reads,
-and the lock the newest release semis is measured on. It costs a project whose
+The floor is 1.49, the first release that refuses a name needing quotes (D59), and the
+lock the newest release semis is measured on. It costs a project whose
 `pg_tviews` is older than 0.1.0-beta.30, which confiture refuses to read since 1.37.
 Confiture requires Python 3.14, and so does semis.
 The explicit file lists are what semis would do anyway, so they stay.
@@ -825,6 +825,7 @@ semis does not:
 | D56 | `semis coverage SCENARIO` reports, of one database, every view, materialized view and TVIEW of the model that reads a table the scenario writes, by confiture's `view_reads` (through views, matviews, TVIEWs and a TVIEW's `function_reads`, not a routine's body, which the report says), with `count(*)` and, when `view_columns` includes `tenancy:`'s column, `count(DISTINCT <column>)`, in a read-only transaction rolled back. Exit 0 by default, since some scenarios hold one tenant on purpose; `--fail-on-single-tenant` exits 1 when a multi-tenant view holds fewer than two. No allowlist in `semis.yaml`. A view whose columns confiture cannot name is its `SchemaError`, unwrapped. Floor `fraiseql-confiture>=1.47` | fraiseql/semis#9, owner, 2026-11-08 |
 | D57 | `semis coverage` reads as the identity `semis.yaml`'s `coverage: session_variables:` names: before any count, in the same read-only transaction, one `SELECT set_config(%s, %s, true)` per variable, sorted, name and value as parameters, rolled back with the transaction. Names are custom settings only, `prefix.name` with identifier-like parts, so no built-in setting (`role`, `search_path`, `transaction_read_only`) is ever handed to PostgreSQL; `fraiseql.*` names are allowed; values are strings. Project level only: no flag, no per-scenario override; no other command sets them. The table report's first line names them, each value a PostgreSQL string literal (`app.x=''`, a `'` doubled) so an empty value or one holding `, ` reads one way, on stderr with `--format json`. Configuration, not pinned. The test role, a superuser owning its tables, skips row-level security, so the feature is described as session variables, not RLS; reading as several identities, `SET ROLE`, and deriving the variables from fraiseql's config are out of scope | consumer, owner, 2026-11-08 |
 | D58 | A view `semis coverage` counts that the database refuses to read, any error the server reports while counting it (a materialized view never refreshed, a setting read without `missing_ok` while unset, a privilege the role lacks), is `ViewReadError` (`SEMIS_DATABASE_003`), raised in `readback`, naming the view's kind and name and PostgreSQL's primary message; its hint is PostgreSQL's when it gives one, `coverage: session_variables:` for an unrecognized setting, otherwise to read the view as the same role. The whole report is refused, as for a `SchemaError`: no partial report. A connection that drops (no SQLSTATE) is not the view's and propagates. | review, 2026-11-09 |
+| D59 | semis composes every schema, table and column name into SQL bare, as PostgreSQL folds it. A name that needs quotes (`"User"`, `"Sales".tb`, `"order line"`) is not quoted by semis: confiture refuses the schema, `DIFFER_403` (`DifferError`, exit 5), from DDL and from the schemas a live read names, and semis prints the refusal unwrapped (D11). Floor `fraiseql-confiture>=1.49` | owner, 2026-11-11 |
 
 ### On the UUID encoding's own arithmetic (D6)
 

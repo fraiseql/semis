@@ -33,24 +33,14 @@ def test_an_existing_table_without_a_surrogate_key_is_refused_before_the_databas
         readback.existing_keys(Unreachable(), keys, by="identifier", values=None)
 
 
-@pytest.mark.parametrize(
-    ("ddl", "table"),
-    [
-        ('CREATE SCHEMA "order"; CREATE TABLE "order".tb_x (body TEXT);', '"order"."tb_x"'),
-        ('CREATE SCHEMA "a.b"; CREATE TABLE "a.b".tb_x (body TEXT);', '"a.b"."tb_x"'),
-        ('CREATE SCHEMA s; CREATE TABLE s."Tb" (body TEXT);', '"s"."Tb"'),
-        (
-            'CREATE SCHEMA sales; CREATE TABLE sales."Tb ""Big"" Order" (body TEXT);',
-            '"sales"."Tb ""Big"" Order"',
-        ),
-    ],
-)
-def test_the_reset_quotes_every_name(ddl: str, table: str) -> None:
-    """A reserved word, a dot or a capital letter: each reads back as the table it names."""
+def test_the_reset_quotes_every_name() -> None:
+    """Each name is written as an identifier, never pasted: confiture refuses one that
+    needs quotes, and semis quotes the rest all the same."""
+    ddl = "CREATE SCHEMA catalog; CREATE TABLE catalog.tb_x (body TEXT);"
     (ref,) = SchemaFacts.from_source(ddl, table_codes=TableCodes({})).insert_order()
     connection = _Deleting()
     readback.delete_range(connection, ref, "id", ("lo", "hi"))
-    assert connection.statements == [f'DELETE FROM {table} WHERE "id" BETWEEN %s AND %s']
+    assert connection.statements == ['DELETE FROM "catalog"."tb_x" WHERE "id" BETWEEN %s AND %s']
 
 
 class _Deleting(Unreachable):

@@ -6,6 +6,16 @@ All notable changes to fraiseql-semis are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-13
+
+### Changed
+
+- **fraiseql-confiture 1.49 or later is required.** A schema whose tables, schemas or
+  columns need quotes, such as `"User"`, `"Sales".tb` or `"order line"`, is now refused
+  by confiture with `DIFFER_403` (exit 5), naming the file and line that declares the
+  name. semis wrote such names bare, so it misnamed them; it now never reaches one.
+  Rename the name so it needs no quotes; `confiture lint` lists every one.
+
 ## [0.8.2] - 2026-11-11
 
 ### Changed
@@ -559,7 +569,8 @@ The first release.
   prints, and requires fraiseql-confiture 1.27, whose `CONFIG_003` refusal of a
   `--database-url` no longer repeats the password either.
 
-[Unreleased]: https://github.com/fraiseql/semis/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/fraiseql/semis/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/fraiseql/semis/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/fraiseql/semis/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/fraiseql/semis/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/fraiseql/semis/compare/v0.7.3...v0.8.0

@@ -54,8 +54,8 @@ def test_type_checker_is_ty() -> None:
     assert "ty" in PYPROJECT["tool"]
 
 
-def test_confiture_floor_is_1_47() -> None:
-    assert "fraiseql-confiture>=1.47,<2" in PYPROJECT["project"]["dependencies"]
+def test_confiture_floor_is_1_49() -> None:
+    assert "fraiseql-confiture>=1.49,<2" in PYPROJECT["project"]["dependencies"]
 
 
 PYTHON = "3.14"

@@ -40,6 +40,14 @@ A schema read from `ddl:` or `env:` takes a `ddl` [schema pin](/concepts/schema-
 one read from `database:` a `live` pin. The two are not comparable. See
 [confiture](https://fraiseql.dev/confiture/) for environments and builds.
 
+### Names that need quotes
+
+A schema whose tables, schemas or columns PostgreSQL can name only in quotes, such as
+`"User"`, `"Sales".tb` or `"order line"`, is refused, from any of the three sources:
+confiture's `DIFFER_403`, exit 5, naming the file and line that declares the name, or
+the relation in a live database. Rename it so it needs no quotes; `confiture lint` lists
+every such name. From `database:`, only the schemas listed are checked.
+
 ## `table_codes:`
 
 Required. A mapping of each schema-qualified table name to its code, an integer written in

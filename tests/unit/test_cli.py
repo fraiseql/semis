@@ -257,6 +257,23 @@ def test_validate_refuses_a_scenario_the_schema_cannot_run(tmp_path: Path) -> No
     )
 
 
+def test_a_name_that_needs_quotes_is_confitures_refusal(tmp_path: Path) -> None:
+    """semis seeds no table it could only name quoted: confiture refuses the schema
+    (DIFFER_403, exit 5), and semis prints its refusal unwrapped."""
+    quoted = TRINITY + 'CREATE TABLE catalog."Tb" (id BIGINT PRIMARY KEY);\n'
+    result = _invoke(tmp_path, "validate", ddl=quoted)
+    line = quoted.count("\n")
+    assert (result.exit_code, result.stderr.splitlines()) == (
+        5,
+        [
+            f'The declared schema names table catalog."Tb" at {tmp_path}/schema.sql:{line},'
+            " which needs quotes: confiture supports a name only as PostgreSQL writes it bare",
+            "Hint: Rename it so it needs no quotes, e.g. catalog.tb; `confiture lint` lists"
+            " every such name (naming_003, naming_004)",
+        ],
+    )
+
+
 def test_validate_names_a_key_it_leaves_null_before_a_value_column(tmp_path: Path) -> None:
     """In column order; the hint says how each kind is given a value."""
     ddl = TRINITY.replace(

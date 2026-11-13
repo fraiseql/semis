@@ -18,11 +18,11 @@ from fraiseql_semis.view_coverage import ViewCount
 SCHEMA = "semis_views"
 DDL = f"""
 CREATE SCHEMA {SCHEMA};
-CREATE TABLE {SCHEMA}."tb Item" (pk_item bigint PRIMARY KEY, id uuid NOT NULL, tenant_id uuid);
-CREATE VIEW {SCHEMA}."v Item" AS SELECT id, tenant_id FROM {SCHEMA}."tb Item";
+CREATE TABLE {SCHEMA}.tb_item (pk_item bigint PRIMARY KEY, id uuid NOT NULL, tenant_id uuid);
+CREATE VIEW {SCHEMA}.v_item AS SELECT id, tenant_id FROM {SCHEMA}.tb_item;
 """
 ROWS = f"""
-INSERT INTO {SCHEMA}."tb Item" VALUES
+INSERT INTO {SCHEMA}.tb_item VALUES
   (1, gen_random_uuid(), '00000000-0000-0000-0000-00000000000a'),
   (2, gen_random_uuid(), '00000000-0000-0000-0000-00000000000a'),
   (3, gen_random_uuid(), '00000000-0000-0000-0000-00000000000b'),
@@ -47,29 +47,29 @@ def _view(name: str) -> ObjectRef:
 
 def test_a_view_counts_its_rows_and_distinct_tenants(database: str) -> None:
     with readback.transaction(database, commit=False) as connection:
-        assert readback.count_view(connection, _view("v Item"), "tenant_id") == (4, 2)
+        assert readback.count_view(connection, _view("v_item"), "tenant_id") == (4, 2)
 
 
 def test_a_view_without_a_tenant_column_counts_its_rows_alone(database: str) -> None:
     with readback.transaction(database, commit=False) as connection:
-        assert readback.count_view(connection, _view("v Item"), None) == (4, None)
+        assert readback.count_view(connection, _view("v_item"), None) == (4, None)
 
 
 def test_a_view_the_database_lacks_is_refused(database_url: str) -> None:
     with (
         readback.transaction(database_url, commit=False) as connection,
-        pytest.raises(SchemaNotBuiltError, match=r"holds no semis_views\.v Item"),
+        pytest.raises(SchemaNotBuiltError, match=r"holds no semis_views\.v_item"),
     ):
-        readback.count_view(connection, _view("v Item"), None)
+        readback.count_view(connection, _view("v_item"), None)
 
 
 # Views PostgreSQL refuses to read: a materialized view never refreshed, and a view
 # reading a setting without missing_ok while it is unset, and one that raises as it is read.
 UNREADABLE = f"""
-CREATE MATERIALIZED VIEW {SCHEMA}.mv_unfilled AS SELECT id FROM {SCHEMA}."tb Item" WITH NO DATA;
+CREATE MATERIALIZED VIEW {SCHEMA}.mv_unfilled AS SELECT id FROM {SCHEMA}.tb_item WITH NO DATA;
 CREATE VIEW {SCHEMA}.v_strict AS
-    SELECT id FROM {SCHEMA}."tb Item" WHERE current_setting('app.tenant') <> '';
-CREATE VIEW {SCHEMA}.v_broken AS SELECT id FROM {SCHEMA}."tb Item" WHERE 1 / (pk_item - pk_item) = 0;
+    SELECT id FROM {SCHEMA}.tb_item WHERE current_setting('app.tenant') <> '';
+CREATE VIEW {SCHEMA}.v_broken AS SELECT id FROM {SCHEMA}.tb_item WHERE 1 / (pk_item - pk_item) = 0;
 """
 
 
@@ -118,7 +118,7 @@ def test_a_read_only_transaction_refuses_a_write(database: str) -> None:
         readback.transaction(database, commit=False, read_only=True) as connection,
         pytest.raises(psycopg.errors.ReadOnlySqlTransaction),
     ):
-        connection.execute(f'DELETE FROM {SCHEMA}."tb Item"')
+        connection.execute(f"DELETE FROM {SCHEMA}.tb_item")
 
 
 APP = "semis_coverage"
